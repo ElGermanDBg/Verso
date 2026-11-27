@@ -147,6 +147,7 @@ class VideoExporter(private val context: Context) {
                     }
                     try {
                         LyricFrameRenderer.drawFrame(
+                            context = context,
                             canvas = canvas,
                             width = width,
                             height = height,
@@ -154,7 +155,8 @@ class VideoExporter(private val context: Context) {
                             lines = lines,
                             positionMs = trackPosMs,
                             photoBitmap = photoBitmap,
-                            albumArtBitmap = albumArtBitmap
+                            albumArtBitmap = albumArtBitmap,
+                            showCenterGuides = false
                         )
                     } finally {
                         inputSurface.unlockCanvasAndPost(canvas)

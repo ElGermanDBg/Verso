@@ -1,7 +1,10 @@
 package com.verso.lyrics
 
 import com.verso.lyrics.model.LrcParser
+import com.verso.lyrics.model.LyricAnimation
+import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
+import com.verso.lyrics.model.LyricStyle
 import com.verso.lyrics.model.LyricsNormalizer
 import com.verso.lyrics.model.activeLyricIndex
 import org.junit.Assert.assertEquals
@@ -46,5 +49,12 @@ class LrcParserAndNormalizerTest {
     @Test
     fun activeLyricIndexHandlesEmptyList() {
         assertEquals(-1, activeLyricIndex(emptyList<LyricLine>(), 1000L))
+    }
+
+    @Test
+    fun storyStylesFontsAndAnimationsAreAvailable() {
+        assertEquals(6, LyricFont.entries.size)
+        assertEquals(5, LyricStyle.entries.size)
+        assertEquals(6, LyricAnimation.entries.size)
     }
 }

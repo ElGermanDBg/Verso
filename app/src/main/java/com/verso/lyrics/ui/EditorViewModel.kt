@@ -18,6 +18,7 @@ import com.verso.lyrics.data.LyricsRepository
 import com.verso.lyrics.export.ExportResult
 import com.verso.lyrics.export.VideoExporter
 import com.verso.lyrics.model.LocalTrack
+import com.verso.lyrics.model.LyricAnimation
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
@@ -269,17 +270,26 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setStyle(style: LyricStyle) = _config.update { it.copy(style = style) }
+    fun setAnimation(animation: LyricAnimation) = _config.update { it.copy(animation = animation) }
     fun setFont(font: LyricFont) = _config.update { it.copy(font = font) }
     fun setTextColor(color: Int) = _config.update { it.copy(textColor = color) }
     fun setAccentColor(color: Int) = _config.update { it.copy(accentColor = color) }
     fun setBackgroundDim(dim: Float) = _config.update { it.copy(backgroundDim = dim.coerceIn(0f, 0.85f)) }
     fun toggleSongBadge() = _config.update { it.copy(showSongBadge = !it.showSongBadge) }
 
+    fun resetLyricTransform() = _config.update {
+        it.copy(lyricPosX = 0.5f, lyricPosY = 0.55f, lyricScale = 1.0f, lyricRotationDeg = 0f)
+    }
+
     fun updateLyricTransform(dxFrac: Float, dyFrac: Float, scaleFactor: Float, rotationDelta: Float) {
         _config.update { cfg ->
+            val rawX = (cfg.lyricPosX + dxFrac).coerceIn(0.15f, 0.85f)
+            val rawY = (cfg.lyricPosY + dyFrac).coerceIn(0.18f, 0.85f)
+            val snappedX = if (kotlin.math.abs(rawX - 0.5f) < 0.015f) 0.5f else rawX
+            val snappedY = if (kotlin.math.abs(rawY - 0.55f) < 0.015f) 0.55f else rawY
             cfg.copy(
-                lyricPosX = (cfg.lyricPosX + dxFrac).coerceIn(0.15f, 0.85f),
-                lyricPosY = (cfg.lyricPosY + dyFrac).coerceIn(0.18f, 0.85f),
+                lyricPosX = snappedX,
+                lyricPosY = snappedY,
                 lyricScale = (cfg.lyricScale * scaleFactor).coerceIn(0.55f, 2.0f),
                 lyricRotationDeg = (cfg.lyricRotationDeg + rotationDelta).coerceIn(-45f, 45f)
             )

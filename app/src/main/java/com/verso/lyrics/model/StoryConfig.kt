@@ -1,21 +1,36 @@
 package com.verso.lyrics.model
 
 import android.net.Uri
+import androidx.annotation.FontRes
+import com.verso.lyrics.R
 
-/** Estilos de animación disponibles para las letras sobre la foto. */
+/** Estilos visuales disponibles para las letras sobre la foto. */
 enum class LyricStyle(val label: String) {
     SCROLL("Scroll"),
-    TYPEWRITER("Máquina"),
-    DYNAMIC("Dinámico"),
-    CARD("Tarjeta")
+    FOCUS("Enfoque"),
+    CARD("Tarjeta"),
+    HIGHLIGHT("Etiqueta"),
+    CINEMA("Cine")
 }
 
-/** Familias tipográficas disponibles para el bloque de letras. */
-enum class LyricFont(val label: String) {
-    SANS_BOLD("Moderna"),
-    SERIF("Editorial"),
-    MONOSPACE("Máquina"),
-    CONDENSED("Cine")
+/** Animaciones de entrada y ritmo para el verso activo. */
+enum class LyricAnimation(val label: String) {
+    FADE_UP("Deslizar"),
+    KARAOKE("Karaoke"),
+    POP_BOUNCE("Rebote"),
+    WORD_BY_WORD("Palabra"),
+    TYPEWRITER("Máquina"),
+    GLOW_PULSE("Neón")
+}
+
+/** Familias tipográficas embebidas para el bloque de letras. */
+enum class LyricFont(val label: String, @FontRes val fontRes: Int) {
+    MODERNA("Moderna", R.font.font_moderna),
+    EDITORIAL("Editorial", R.font.font_editorial),
+    IMPACTO("Impacto", R.font.font_impacto),
+    MANUSCRITA("Script", R.font.font_manuscrita),
+    NEON("Retro", R.font.font_neon),
+    MAQUINA("Máquina", R.font.font_maquina)
 }
 
 /** Configuración completa de una historia musical editable y exportable a MP4. */
@@ -26,7 +41,8 @@ data class StoryConfig(
     val clipDurationMs: Long = 15_000L,
     val lyricsOffsetMs: Int = 0,
     val style: LyricStyle = LyricStyle.SCROLL,
-    val font: LyricFont = LyricFont.SANS_BOLD,
+    val animation: LyricAnimation = LyricAnimation.FADE_UP,
+    val font: LyricFont = LyricFont.MODERNA,
     val textColor: Int = 0xFFFFFFFF.toInt(),
     val accentColor: Int = 0xFFFF5C8A.toInt(),
     val backgroundDim: Float = 0.35f,

@@ -7,6 +7,13 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +24,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -32,6 +40,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.MovieCreation
 import androidx.compose.material.icons.rounded.MusicNote
@@ -41,11 +53,13 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,41 +67,52 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.verso.lyrics.model.LyricAnimation
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricStyle
 import com.verso.lyrics.model.LyricsState
+import com.verso.lyrics.model.StoryConfig
 import com.verso.lyrics.render.LyricFrameRenderer
-import com.verso.lyrics.update.AppUpdateManager
-import com.verso.lyrics.update.GithubReleaseInfo
 import com.verso.lyrics.ui.theme.VersoAccent
 import com.verso.lyrics.ui.theme.VersoBg
+import com.verso.lyrics.ui.theme.VersoGold
 import com.verso.lyrics.ui.theme.VersoSurface
 import com.verso.lyrics.ui.theme.VersoSurfaceElevated
 import com.verso.lyrics.ui.theme.VersoTextSecondary
+import com.verso.lyrics.update.AppUpdateManager
+import com.verso.lyrics.update.GithubReleaseInfo
+
+private enum class DockPanel {
+    TRAMO,
+    ESTILO,
+    TEXTO
+}
 
 @Composable
 fun EditorScreen(viewModel: EditorViewModel) {
@@ -118,7 +143,8 @@ fun EditorScreen(viewModel: EditorViewModel) {
         )
     }
     var showTrackPicker by remember { mutableStateOf(false) }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var activePanel by remember { mutableStateOf<DockPanel?>(null) }
+    var isDraggingLyric by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -151,6 +177,11 @@ fun EditorScreen(viewModel: EditorViewModel) {
         (lyricsState as? LyricsState.Available)?.lines.orEmpty()
     }
 
+    val isTransformed = config.lyricPosX != 0.5f ||
+        config.lyricPosY != 0.55f ||
+        config.lyricScale != 1.0f ||
+        config.lyricRotationDeg != 0f
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -158,41 +189,31 @@ fun EditorScreen(viewModel: EditorViewModel) {
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // Barra superior
+        // Barra superior flotante
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "Verso",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color.White
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Verso",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        brush = Brush.linearGradient(listOf(VersoAccent, VersoGold))
+                    )
+                )
+            }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = {
-                    photoPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                }) {
-                    Icon(Icons.Rounded.PhotoLibrary, contentDescription = "Elegir foto", tint = Color.White)
-                }
-
-                IconButton(onClick = {
-                    if (hasAudioPermission && tracks.isEmpty()) {
-                        viewModel.loadDeviceTracks()
-                    }
-                    showTrackPicker = true
-                }) {
-                    Icon(Icons.Rounded.MusicNote, contentDescription = "Elegir canción", tint = Color.White)
-                }
-
                 IconButton(onClick = { lrcFolderLauncher.launch(null) }) {
-                    Icon(Icons.Rounded.FolderOpen, contentDescription = "Carpeta .lrc", tint = VersoTextSecondary)
+                    Icon(
+                        Icons.Rounded.FolderOpen,
+                        contentDescription = "Carpeta .lrc",
+                        tint = VersoTextSecondary
+                    )
                 }
 
                 Box {
@@ -215,39 +236,67 @@ fun EditorScreen(viewModel: EditorViewModel) {
                     }
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
-                Button(
-                    onClick = { viewModel.startExport() },
-                    enabled = config.track != null,
-                    colors = ButtonDefaults.buttonColors(containerColor = VersoAccent),
-                    shape = RoundedCornerShape(20.dp)
+                val exportEnabled = config.track != null
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(
+                            if (exportEnabled) {
+                                Brush.horizontalGradient(listOf(VersoAccent, Color(0xFFFF8A5B)))
+                            } else {
+                                Brush.horizontalGradient(listOf(VersoSurfaceElevated, VersoSurfaceElevated))
+                            }
+                        )
+                        .clickable(enabled = exportEnabled) { viewModel.startExport() }
+                        .padding(horizontal = 16.dp, vertical = 9.dp)
                 ) {
-                    Icon(Icons.Rounded.MovieCreation, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Exportar", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Rounded.MovieCreation,
+                            contentDescription = null,
+                            tint = if (exportEnabled) Color.White else VersoTextSecondary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Exportar",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = if (exportEnabled) Color.White else VersoTextSecondary
+                        )
+                    }
                 }
             }
         }
 
-        // Lienzo 9:16 interactivo
+        // Lienzo inmersivo 9:16
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp),
+                .padding(horizontal = 16.dp, vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {
             Box(
                 modifier = Modifier
                     .aspectRatio(9f / 16f)
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(24.dp))
                     .background(VersoSurface)
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(24.dp))
                     .pointerInput(Unit) {
-                        detectTapGestures { viewModel.togglePlayPause() }
+                        detectTapGestures {
+                            if (activePanel != null) {
+                                activePanel = null
+                            } else {
+                                viewModel.togglePlayPause()
+                            }
+                        }
                     }
                     .pointerInput(Unit) {
                         detectTransformGestures { _, pan, zoom, rotation ->
+                            isDraggingLyric = true
                             val w = size.width.toFloat().coerceAtLeast(1f)
                             val h = size.height.toFloat().coerceAtLeast(1f)
                             viewModel.updateLyricTransform(
@@ -262,6 +311,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     drawIntoCanvas { canvas ->
                         LyricFrameRenderer.drawFrame(
+                            context = context,
                             canvas = canvas.nativeCanvas,
                             width = size.width.toInt(),
                             height = size.height.toInt(),
@@ -269,74 +319,219 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             lines = lyricsLines,
                             positionMs = currentPositionMs,
                             photoBitmap = photoBitmap,
-                            albumArtBitmap = albumArtBitmap
+                            albumArtBitmap = albumArtBitmap,
+                            showCenterGuides = isDraggingLyric
                         )
                     }
                 }
 
-                // Botón sutil Play/Pause en esquina inferior derecha del preview
-                if (config.track != null) {
-                    Box(
+                // Onboarding visual directo si falta foto o canción
+                if (config.photoUri == null || config.track == null) {
+                    Column(
                         modifier = Modifier
-                            .align(Alignment.BottomEnd)
+                            .align(Alignment.Center)
+                            .padding(horizontal = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        OnboardingStepCard(
+                            icon = Icons.Rounded.PhotoLibrary,
+                            title = if (config.photoUri == null) "1. Elegir foto" else "Foto lista",
+                            completed = config.photoUri != null,
+                            onClick = {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            }
+                        )
+                        OnboardingStepCard(
+                            icon = Icons.Rounded.MusicNote,
+                            title = config.track?.title ?: "2. Elegir canción",
+                            completed = config.track != null,
+                            onClick = {
+                                if (hasAudioPermission && tracks.isEmpty()) viewModel.loadDeviceTracks()
+                                showTrackPicker = true
+                            }
+                        )
+                    }
+                }
+
+                // Botón rápido para centrar la letra cuando se movió
+                if (isTransformed && config.track != null) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
                             .padding(12.dp)
-                            .size(40.dp)
-                            .clip(CircleShape)
+                            .clip(RoundedCornerShape(16.dp))
                             .background(Color.Black.copy(alpha = 0.55f))
-                            .clickable { viewModel.togglePlayPause() },
-                        contentAlignment = Alignment.Center
+                            .clickable {
+                                isDraggingLyric = false
+                                viewModel.resetLyricTransform()
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (isPlaying) "Pausar" else "Reproducir",
-                            tint = Color.White
+                            Icons.Rounded.CenterFocusStrong,
+                            contentDescription = "Centrar",
+                            tint = Color.White,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Centrar", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
+                // Mini barra inferior del lienzo: Play/Pause + progreso del tramo
+                if (config.track != null) {
+                    val clipProgress = if (config.clipDurationMs > 0L) {
+                        ((currentPositionMs - config.clipStartMs).toFloat() / config.clipDurationMs.toFloat()).coerceIn(0f, 1f)
+                    } else 0f
+
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(10.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.Black.copy(alpha = 0.52f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(VersoAccent)
+                                .clickable { viewModel.togglePlayPause() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        LinearProgressIndicator(
+                            progress = { clipProgress },
+                            color = VersoAccent,
+                            trackColor = Color.White.copy(alpha = 0.2f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = formatMs(currentPositionMs),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
             }
         }
 
-        // Panel de edición inferior con 3 pestañas
-        Column(
+        // Panel expandible dinámico
+        AnimatedVisibility(
+            visible = activePanel != null,
+            enter = slideInVertically { it / 2 } + fadeIn(),
+            exit = slideOutVertically { it / 2 } + fadeOut()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(VersoSurface)
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+            ) {
+                AnimatedContent(
+                    targetState = activePanel,
+                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    label = "panelContent"
+                ) { panel ->
+                    when (panel) {
+                        DockPanel.TRAMO -> TramoControls(
+                            config = config,
+                            lyricsState = lyricsState,
+                            onClipStartChange = viewModel::setClipStart,
+                            onDurationSelect = viewModel::setClipDuration,
+                            onAdjustOffset = viewModel::adjustLyricsOffset,
+                            onResetOffset = viewModel::resetLyricsOffset,
+                            onChangeLyrics = viewModel::openCandidatesPicker
+                        )
+                        DockPanel.ESTILO -> EstiloYAnimacionControls(
+                            config = config,
+                            onSelectStyle = viewModel::setStyle,
+                            onSelectAnimation = viewModel::setAnimation,
+                            onToggleBadge = viewModel::toggleSongBadge
+                        )
+                        DockPanel.TEXTO -> TextoYColorControls(
+                            config = config,
+                            paletteColors = paletteColors,
+                            onSelectFont = viewModel::setFont,
+                            onSelectTextColor = viewModel::setTextColor,
+                            onSelectAccentColor = viewModel::setAccentColor,
+                            onDimChange = viewModel::setBackgroundDim
+                        )
+                        null -> Unit
+                    }
+                }
+            }
+        }
+
+        // Dock inferior rápido de 5 acciones
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .clip(RoundedCornerShape(22.dp))
                 .background(VersoSurface)
-                .padding(bottom = 10.dp)
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = VersoSurface,
-                contentColor = VersoAccent
+            DockItem(
+                icon = Icons.Rounded.PhotoLibrary,
+                label = "Foto",
+                selected = false
             ) {
-                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Tramo") })
-                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Estilo") })
-                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Apariencia") })
+                photoPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
             }
-
-            when (selectedTab) {
-                0 -> TramoControls(
-                    config = config,
-                    lyricsState = lyricsState,
-                    onClipStartChange = viewModel::setClipStart,
-                    onDurationSelect = viewModel::setClipDuration,
-                    onAdjustOffset = viewModel::adjustLyricsOffset,
-                    onResetOffset = viewModel::resetLyricsOffset,
-                    onChangeLyrics = viewModel::openCandidatesPicker
-                )
-                1 -> EstiloControls(
-                    config = config,
-                    onSelectStyle = viewModel::setStyle,
-                    onToggleBadge = viewModel::toggleSongBadge
-                )
-                2 -> AparienciaControls(
-                    config = config,
-                    paletteColors = paletteColors,
-                    onSelectFont = viewModel::setFont,
-                    onSelectTextColor = viewModel::setTextColor,
-                    onSelectAccentColor = viewModel::setAccentColor,
-                    onDimChange = viewModel::setBackgroundDim
-                )
+            DockItem(
+                icon = Icons.Rounded.MusicNote,
+                label = "Música",
+                selected = false
+            ) {
+                if (hasAudioPermission && tracks.isEmpty()) viewModel.loadDeviceTracks()
+                showTrackPicker = true
+            }
+            DockItem(
+                icon = Icons.Rounded.ContentCut,
+                label = "Tramo",
+                selected = activePanel == DockPanel.TRAMO
+            ) {
+                activePanel = if (activePanel == DockPanel.TRAMO) null else DockPanel.TRAMO
+            }
+            DockItem(
+                icon = Icons.Rounded.AutoAwesome,
+                label = "Estilo",
+                selected = activePanel == DockPanel.ESTILO
+            ) {
+                activePanel = if (activePanel == DockPanel.ESTILO) null else DockPanel.ESTILO
+            }
+            DockItem(
+                icon = Icons.Rounded.TextFields,
+                label = "Texto",
+                selected = activePanel == DockPanel.TEXTO
+            ) {
+                activePanel = if (activePanel == DockPanel.TEXTO) null else DockPanel.TEXTO
             }
         }
     }
@@ -384,8 +579,77 @@ fun EditorScreen(viewModel: EditorViewModel) {
 }
 
 @Composable
+private fun OnboardingStepCard(
+    icon: ImageVector,
+    title: String,
+    completed: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = 0.62f))
+            .border(
+                width = 1.dp,
+                color = if (completed) Color(0xFF4ADE80).copy(alpha = 0.7f) else Color.White.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (completed) Icons.Rounded.CheckCircle else icon,
+            contentDescription = null,
+            tint = if (completed) Color(0xFF4ADE80) else VersoAccent,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = title,
+            color = Color.White,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun DockItem(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) VersoAccent.copy(alpha = 0.18f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (selected) VersoAccent else Color.White,
+            modifier = Modifier.size(21.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (selected) VersoAccent else VersoTextSecondary
+        )
+    }
+}
+
+@Composable
 private fun TramoControls(
-    config: com.verso.lyrics.model.StoryConfig,
+    config: StoryConfig,
     lyricsState: LyricsState,
     onClipStartChange: (Long) -> Unit,
     onDurationSelect: (Long) -> Unit,
@@ -393,11 +657,11 @@ private fun TramoControls(
     onResetOffset: () -> Unit,
     onChangeLyrics: () -> Unit
 ) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         val track = config.track
         if (track == null) {
             Text(
-                text = "Toca el ícono de música arriba para elegir una canción del dispositivo.",
+                text = "Elige primero una canción en Música para recortar el tramo.",
                 style = MaterialTheme.typography.bodySmall,
                 color = VersoTextSecondary
             )
@@ -411,15 +675,14 @@ private fun TramoControls(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Inicio: ${formatMs(config.clipStartMs)} — ${formatMs(config.clipStartMs + config.clipDurationMs)}",
+                text = "Tramo: ${formatMs(config.clipStartMs)} — ${formatMs(config.clipStartMs + config.clipDurationMs)}",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(15_000L to "15s", 30_000L to "30s", 45_000L to "45s").forEach { (dur, label) ->
-                    val selected = config.clipDurationMs == dur
                     FilterChip(
-                        selected = selected,
+                        selected = config.clipDurationMs == dur,
                         onClick = { onDurationSelect(dur) },
                         label = { Text(label, fontSize = 11.sp) }
                     )
@@ -448,7 +711,7 @@ private fun TramoControls(
                 OffsetChip("+0.5s") { onAdjustOffset(500) }
             }
 
-            TextButton(onClick = onChangeLyrics) {
+            TextButton(onClick = onChangeLyrics, contentPadding = PaddingValues(horizontal = 8.dp)) {
                 Icon(Icons.Rounded.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
@@ -461,12 +724,15 @@ private fun TramoControls(
 }
 
 @Composable
-private fun EstiloControls(
-    config: com.verso.lyrics.model.StoryConfig,
+private fun EstiloYAnimacionControls(
+    config: StoryConfig,
     onSelectStyle: (LyricStyle) -> Unit,
+    onSelectAnimation: (LyricAnimation) -> Unit,
     onToggleBadge: () -> Unit
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text("Estilo", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+        Spacer(modifier = Modifier.height(4.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -477,32 +743,57 @@ private fun EstiloControls(
                 FilterChip(
                     selected = config.style == style,
                     onClick = { onSelectStyle(style) },
-                    label = { Text(style.label) }
+                    label = { Text(style.label, fontSize = 12.sp) }
                 )
             }
         }
-        Spacer(modifier = Modifier.height(10.dp))
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("Animación", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            LyricAnimation.entries.forEach { anim ->
+                FilterChip(
+                    selected = config.animation == anim,
+                    onClick = { onSelectAnimation(anim) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = VersoGold.copy(alpha = 0.22f),
+                        selectedLabelColor = VersoGold
+                    ),
+                    label = { Text(anim.label, fontSize = 12.sp) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Mostrar tarjeta de canción", style = MaterialTheme.typography.bodyMedium)
+            Text("Tarjeta de canción", style = MaterialTheme.typography.bodySmall)
             Switch(checked = config.showSongBadge, onCheckedChange = { onToggleBadge() })
         }
     }
 }
 
 @Composable
-private fun AparienciaControls(
-    config: com.verso.lyrics.model.StoryConfig,
+private fun TextoYColorControls(
+    config: StoryConfig,
     paletteColors: List<Int>,
     onSelectFont: (LyricFont) -> Unit,
     onSelectTextColor: (Int) -> Unit,
     onSelectAccentColor: (Int) -> Unit,
     onDimChange: (Float) -> Unit
 ) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text("Tipografía", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+        Spacer(modifier = Modifier.height(4.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -510,15 +801,21 @@ private fun AparienciaControls(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             LyricFont.entries.forEach { font ->
+                val family = remember(font) { FontFamily(Font(font.fontRes)) }
                 FilterChip(
                     selected = config.font == font,
                     onClick = { onSelectFont(font) },
-                    label = { Text(font.label) }
+                    label = {
+                        Text(
+                            text = font.label,
+                            style = TextStyle(fontFamily = family, fontSize = 14.sp)
+                        )
+                    }
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         Row(
             modifier = Modifier
@@ -527,7 +824,7 @@ private fun AparienciaControls(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Color:", style = MaterialTheme.typography.labelMedium, color = VersoTextSecondary)
+            Text("Color:", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
             paletteColors.forEach { argb ->
                 val selected = config.textColor == argb
                 Box(
@@ -554,7 +851,7 @@ private fun AparienciaControls(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Fondo oscuro", style = MaterialTheme.typography.labelMedium, color = VersoTextSecondary)
+            Text("Oscurecer", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
             Spacer(modifier = Modifier.width(10.dp))
             Slider(
                 value = config.backgroundDim,
