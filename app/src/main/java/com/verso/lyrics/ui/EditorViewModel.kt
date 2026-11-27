@@ -254,8 +254,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun ensureMaskReadyForManualEdit() {
         val photo = _photoBitmap.value ?: return
-        if (_subjectMaskBitmap.value == null) {
+        val current = _subjectMaskBitmap.value
+        if (current == null || current.isRecycled) {
             _subjectMaskBitmap.value = SubjectSegmenter.createEmptyMask(photo)
+            _maskVersion.value += 1
+        } else if (!current.isMutable) {
+            _subjectMaskBitmap.value = current.copy(Bitmap.Config.ARGB_8888, true)
+                ?: SubjectSegmenter.createEmptyMask(photo)
             _maskVersion.value += 1
         }
         _segmentationError.value = null
@@ -288,9 +293,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val photo = _photoBitmap.value ?: return
         val mask = _subjectMaskBitmap.value ?: return
         viewModelScope.launch {
-            val fg = withContext(Dispatchers.Default) {
-                SubjectSegmenter.applyMask(photo, mask)
-            }
+            val fg = runCatching {
+                withContext(Dispatchers.Default) {
+                    SubjectSegmenter.applyMask(photo, mask)
+                }
+            }.getOrNull() ?: return@launch
             _foregroundBitmap.value = fg
             _config.update { it.copy(lyricsBehindSubject = true) }
         }

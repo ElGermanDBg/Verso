@@ -760,12 +760,13 @@ object LyricFrameRenderer {
         lineSpacingMult: Float = 1.15f
     ) {
         val alignment = layoutAlignmentFor(config.textAlignment)
+        val safeAlpha = alpha.coerceIn(0, 255)
         if (outlinePassOnly) {
             val hollowPaint = TextPaint(paint).apply {
                 style = Paint.Style.STROKE
                 strokeJoin = Paint.Join.ROUND
                 strokeWidth = max(2f, paint.textSize * 0.045f)
-                color = ColorUtils.setAlphaComponent(config.textColor, (alpha * 0.92f).toInt().coerceIn(40, 255))
+                color = ColorUtils.setAlphaComponent(config.textColor, (safeAlpha * 0.92f).toInt().coerceIn(40, 255))
                 clearShadowLayer()
                 shader = null
             }
@@ -784,7 +785,7 @@ object LyricFrameRenderer {
                         style = Paint.Style.STROKE
                         strokeJoin = Paint.Join.ROUND
                         strokeWidth = max(1.8f, paint.textSize * 0.035f)
-                        color = ColorUtils.setAlphaComponent(config.accentColor, (alpha * 0.75f).toInt())
+                        color = ColorUtils.setAlphaComponent(config.accentColor, (safeAlpha * 0.75f).toInt())
                         clearShadowLayer()
                     }
                     buildLayout(text, accentOutline, maxWidth, alignment, lineSpacingMult).draw(canvas)
@@ -796,7 +797,7 @@ object LyricFrameRenderer {
                     style = Paint.Style.STROKE
                     strokeJoin = Paint.Join.ROUND
                     strokeWidth = paint.textSize * 0.13f
-                    color = ColorUtils.setAlphaComponent(if (lum > 0.45) Color.BLACK else Color.WHITE, alpha)
+                    color = ColorUtils.setAlphaComponent(if (lum > 0.45) Color.BLACK else Color.WHITE, safeAlpha)
                     clearShadowLayer()
                 }
                 buildLayout(text, strokePaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
@@ -804,10 +805,10 @@ object LyricFrameRenderer {
             }
             LyricEffect.NEON -> {
                 val outerPaint = TextPaint(paint).apply {
-                    setShadowLayer(paint.textSize * 0.45f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, alpha))
+                    setShadowLayer(paint.textSize * 0.45f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, safeAlpha))
                 }
                 val innerPaint = TextPaint(paint).apply {
-                    setShadowLayer(paint.textSize * 0.18f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, alpha))
+                    setShadowLayer(paint.textSize * 0.18f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, safeAlpha))
                 }
                 buildLayout(text, outerPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
                 buildLayout(text, innerPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
@@ -816,11 +817,11 @@ object LyricFrameRenderer {
                 val shift = paint.textSize * 0.055f * sin(posMs / 85.0).toFloat()
                 val shiftY = paint.textSize * 0.022f * cos(posMs / 60.0).toFloat()
                 val cyanPaint = TextPaint(paint).apply {
-                    color = ColorUtils.setAlphaComponent(0xFF00F0FF.toInt(), (alpha * 0.78f).toInt())
+                    color = ColorUtils.setAlphaComponent(0xFF00F0FF.toInt(), (safeAlpha * 0.78f).toInt())
                     clearShadowLayer()
                 }
                 val magentaPaint = TextPaint(paint).apply {
-                    color = ColorUtils.setAlphaComponent(0xFFFF0055.toInt(), (alpha * 0.78f).toInt())
+                    color = ColorUtils.setAlphaComponent(0xFFFF0055.toInt(), (safeAlpha * 0.78f).toInt())
                     clearShadowLayer()
                 }
                 canvas.save()
@@ -841,9 +842,9 @@ object LyricFrameRenderer {
                     gradPaint.shader = LinearGradient(
                         0f, 0f, maxWidth.toFloat(), 0f,
                         intArrayOf(
-                            ColorUtils.setAlphaComponent(config.textColor, alpha),
-                            ColorUtils.setAlphaComponent(config.accentColor, alpha),
-                            ColorUtils.setAlphaComponent(0xFFFFD166.toInt(), alpha)
+                            ColorUtils.setAlphaComponent(config.textColor, safeAlpha),
+                            ColorUtils.setAlphaComponent(config.accentColor, safeAlpha),
+                            ColorUtils.setAlphaComponent(0xFFFFD166.toInt(), safeAlpha)
                         ),
                         null,
                         Shader.TileMode.CLAMP
@@ -855,7 +856,7 @@ object LyricFrameRenderer {
                 val depthColor = ColorUtils.blendARGB(config.accentColor, Color.BLACK, 0.35f)
                 val step = max(1.5f, paint.textSize * 0.028f)
                 val shadowPaint = TextPaint(paint).apply {
-                    color = ColorUtils.setAlphaComponent(depthColor, (alpha * 0.85f).toInt())
+                    color = ColorUtils.setAlphaComponent(depthColor, (safeAlpha * 0.85f).toInt())
                     clearShadowLayer()
                 }
                 val layout3d = buildLayout(text, shadowPaint, maxWidth, alignment, lineSpacingMult)

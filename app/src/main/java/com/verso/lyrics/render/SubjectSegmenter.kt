@@ -104,7 +104,12 @@ object SubjectSegmenter {
         }
 
         // Paso 2: Suavizado guiado por color de la foto (Joint Bilateral 3x3 rápido)
-        val smallPhoto = Bitmap.createScaledBitmap(sourceBitmap, maskWidth, maskHeight, true)
+        val rawSmallPhoto = Bitmap.createScaledBitmap(sourceBitmap, maskWidth, maskHeight, true)
+        val smallPhoto = if (rawSmallPhoto.config == Bitmap.Config.ARGB_8888) {
+            rawSmallPhoto
+        } else {
+            rawSmallPhoto.copy(Bitmap.Config.ARGB_8888, false).also { rawSmallPhoto.recycle() }
+        }
         val photoPixels = IntArray(total)
         smallPhoto.getPixels(photoPixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
         smallPhoto.recycle()
@@ -157,8 +162,14 @@ object SubjectSegmenter {
         val rawMaskBitmap = Bitmap.createBitmap(maskWidth, maskHeight, Bitmap.Config.ARGB_8888)
         rawMaskBitmap.setPixels(maskPixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
 
-        val fullMaskBitmap = Bitmap.createScaledBitmap(rawMaskBitmap, sourceBitmap.width, sourceBitmap.height, true)
-        if (fullMaskBitmap !== rawMaskBitmap) rawMaskBitmap.recycle()
+        val fullMaskBitmap = Bitmap.createBitmap(sourceBitmap.width, sourceBitmap.height, Bitmap.Config.ARGB_8888)
+        Canvas(fullMaskBitmap).drawBitmap(
+            rawMaskBitmap,
+            null,
+            android.graphics.Rect(0, 0, sourceBitmap.width, sourceBitmap.height),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        )
+        rawMaskBitmap.recycle()
 
         val foreground = applyMask(sourceBitmap, fullMaskBitmap)
         SubjectMaskResult(maskBitmap = fullMaskBitmap, foregroundBitmap = foreground)
@@ -169,6 +180,7 @@ object SubjectSegmenter {
 
     fun applyMask(sourceBitmap: Bitmap, maskBitmap: Bitmap): Bitmap {
         val outputBitmap = Bitmap.createBitmap(sourceBitmap.width, sourceBitmap.height, Bitmap.Config.ARGB_8888)
+        if (sourceBitmap.isRecycled || maskBitmap.isRecycled) return outputBitmap
         val canvas = Canvas(outputBitmap)
         val drawPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         canvas.drawBitmap(sourceBitmap, 0f, 0f, drawPaint)
@@ -190,20 +202,22 @@ object SubjectSegmenter {
         radiusPx: Float,
         addMode: Boolean
     ) {
-        if (maskBitmap.isRecycled) return
-        val canvas = Canvas(maskBitmap)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            strokeWidth = (radiusPx * 2f).coerceAtLeast(4f)
-            if (addMode) {
-                color = Color.WHITE
-            } else {
-                xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+        if (maskBitmap.isRecycled || !maskBitmap.isMutable) return
+        runCatching {
+            val canvas = Canvas(maskBitmap)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+                strokeWidth = (radiusPx * 2f).coerceAtLeast(4f)
+                if (addMode) {
+                    color = Color.WHITE
+                } else {
+                    xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+                }
             }
+            canvas.drawLine(x1, y1, x2, y2, paint)
         }
-        canvas.drawLine(x1, y1, x2, y2, paint)
     }
 
     private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
