@@ -90,44 +90,55 @@ object LyricFrameRenderer {
             drawCenterGuides(canvas, width, height, config)
         }
 
+        val effectivePosMs = (positionMs + config.lyricsOffsetMs).coerceAtLeast(0L)
+        val activeIdx = activeLyricIndex(lines, effectivePosMs)
+        val typeface = resolveTypeface(context, config.font)
+
         if (lines.isEmpty()) {
             drawEmptyHint(context, canvas, width, height, config)
         } else {
-            val effectivePosMs = (positionMs + config.lyricsOffsetMs).coerceAtLeast(0L)
-            val activeIdx = activeLyricIndex(lines, effectivePosMs)
-            val typeface = resolveTypeface(context, config.font)
-
-            canvas.save()
-            val anchorX = width * config.lyricPosX
-            val anchorY = height * config.lyricPosY
-            canvas.translate(anchorX, anchorY)
-            canvas.rotate(config.lyricRotationDeg)
-            canvas.scale(config.lyricScale, config.lyricScale)
-
-            when (config.style) {
-                LyricStyle.SCROLL -> drawScrollStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-                LyricStyle.FOCUS -> drawFocusStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-                LyricStyle.CARD -> drawCardStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-                LyricStyle.HIGHLIGHT -> drawHighlightStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-                LyricStyle.CINEMA -> drawCinemaStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-                LyricStyle.STACK -> drawStackStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-            }
-
-            canvas.restore()
+            drawLyricsLayer(
+                canvas = canvas,
+                width = width,
+                height = height,
+                config = config,
+                lines = lines,
+                activeIdx = activeIdx,
+                posMs = effectivePosMs,
+                typeface = typeface,
+                outlinePassOnly = false
+            )
         }
 
         // Capa de profundidad: persona recortada encima de las letras
-        if (config.lyricsBehindSubject && foregroundBitmap != null && !foregroundBitmap.isRecycled) {
+        val hasForeground = config.lyricsBehindSubject && foregroundBitmap != null && !foregroundBitmap.isRecycled
+        if (hasForeground) {
+            val fg = foregroundBitmap!!
             val dstRect = computeCenterCropRect(
-                foregroundBitmap.width.toFloat(),
-                foregroundBitmap.height.toFloat(),
+                fg.width.toFloat(),
+                fg.height.toFloat(),
                 width,
                 height
             )
             val fgPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
                 colorFilter = colorFilterForForeground(config.photoFilter, config.backgroundDim)
             }
-            canvas.drawBitmap(foregroundBitmap, null, dstRect, fgPaint)
+            canvas.drawBitmap(fg, null, dstRect, fgPaint)
+
+            // Efecto Doble capa: contorno hueco fino por encima de la silueta
+            if (config.effect == LyricEffect.HOLLOW_OVERLAP && lines.isNotEmpty()) {
+                drawLyricsLayer(
+                    canvas = canvas,
+                    width = width,
+                    height = height,
+                    config = config,
+                    lines = lines,
+                    activeIdx = activeIdx,
+                    posMs = effectivePosMs,
+                    typeface = typeface,
+                    outlinePassOnly = true
+                )
+            }
         }
 
         if (config.showSongBadge && config.track != null) {
@@ -708,6 +719,35 @@ object LyricFrameRenderer {
         }
     }
 
+    private fun drawLyricsLayer(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        config: StoryConfig,
+        lines: List<LyricLine>,
+        activeIdx: Int,
+        posMs: Long,
+        typeface: Typeface,
+        outlinePassOnly: Boolean
+    ) {
+        canvas.save()
+        canvas.translate(width * config.lyricPosX, height * config.lyricPosY)
+        canvas.rotate(config.lyricRotationDeg)
+        canvas.scale(config.lyricScale, config.lyricScale)
+
+        when (config.style) {
+            LyricStyle.SCROLL -> drawScrollStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)
+            LyricStyle.FOCUS -> drawFocusStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)
+            LyricStyle.CARD -> drawCardStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)
+            LyricStyle.HIGHLIGHT -> drawHighlightStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)
+            LyricStyle.CINEMA -> drawCinemaStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)
+            LyricStyle.STACK -> drawStackStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)
+            LyricStyle.POSTER -> drawPosterStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)
+        }
+
+        canvas.restore()
+    }
+
     private fun drawStyledLayout(
         canvas: Canvas,
         text: CharSequence,
@@ -715,12 +755,40 @@ object LyricFrameRenderer {
         maxWidth: Int,
         config: StoryConfig,
         posMs: Long,
-        alpha: Int
+        alpha: Int,
+        outlinePassOnly: Boolean = false,
+        lineSpacingMult: Float = 1.15f
     ) {
         val alignment = layoutAlignmentFor(config.textAlignment)
+        if (outlinePassOnly) {
+            val hollowPaint = TextPaint(paint).apply {
+                style = Paint.Style.STROKE
+                strokeJoin = Paint.Join.ROUND
+                strokeWidth = max(2f, paint.textSize * 0.045f)
+                color = ColorUtils.setAlphaComponent(config.textColor, (alpha * 0.92f).toInt().coerceIn(40, 255))
+                clearShadowLayer()
+                shader = null
+            }
+            buildLayout(text, hollowPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
+            return
+        }
+
         when (config.effect) {
             LyricEffect.NONE -> {
-                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment, lineSpacingMult).draw(canvas)
+            }
+            LyricEffect.HOLLOW_OVERLAP -> {
+                buildLayout(text, paint, maxWidth, alignment, lineSpacingMult).draw(canvas)
+                if (!config.lyricsBehindSubject) {
+                    val accentOutline = TextPaint(paint).apply {
+                        style = Paint.Style.STROKE
+                        strokeJoin = Paint.Join.ROUND
+                        strokeWidth = max(1.8f, paint.textSize * 0.035f)
+                        color = ColorUtils.setAlphaComponent(config.accentColor, (alpha * 0.75f).toInt())
+                        clearShadowLayer()
+                    }
+                    buildLayout(text, accentOutline, maxWidth, alignment, lineSpacingMult).draw(canvas)
+                }
             }
             LyricEffect.OUTLINE -> {
                 val lum = ColorUtils.calculateLuminance(paint.color)
@@ -731,8 +799,8 @@ object LyricFrameRenderer {
                     color = ColorUtils.setAlphaComponent(if (lum > 0.45) Color.BLACK else Color.WHITE, alpha)
                     clearShadowLayer()
                 }
-                buildLayout(text, strokePaint, maxWidth, alignment).draw(canvas)
-                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, strokePaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment, lineSpacingMult).draw(canvas)
             }
             LyricEffect.NEON -> {
                 val outerPaint = TextPaint(paint).apply {
@@ -741,8 +809,8 @@ object LyricFrameRenderer {
                 val innerPaint = TextPaint(paint).apply {
                     setShadowLayer(paint.textSize * 0.18f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, alpha))
                 }
-                buildLayout(text, outerPaint, maxWidth, alignment).draw(canvas)
-                buildLayout(text, innerPaint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, outerPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
+                buildLayout(text, innerPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
             }
             LyricEffect.GLITCH -> {
                 val shift = paint.textSize * 0.055f * sin(posMs / 85.0).toFloat()
@@ -757,15 +825,15 @@ object LyricFrameRenderer {
                 }
                 canvas.save()
                 canvas.translate(-shift, shiftY)
-                buildLayout(text, cyanPaint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, cyanPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
                 canvas.restore()
 
                 canvas.save()
                 canvas.translate(shift, -shiftY)
-                buildLayout(text, magentaPaint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, magentaPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
                 canvas.restore()
 
-                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment, lineSpacingMult).draw(canvas)
             }
             LyricEffect.GRADIENT -> {
                 val gradPaint = TextPaint(paint)
@@ -781,7 +849,7 @@ object LyricFrameRenderer {
                         Shader.TileMode.CLAMP
                     )
                 }
-                buildLayout(text, gradPaint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, gradPaint, maxWidth, alignment, lineSpacingMult).draw(canvas)
             }
             LyricEffect.SHADOW_3D -> {
                 val depthColor = ColorUtils.blendARGB(config.accentColor, Color.BLACK, 0.35f)
@@ -790,14 +858,14 @@ object LyricFrameRenderer {
                     color = ColorUtils.setAlphaComponent(depthColor, (alpha * 0.85f).toInt())
                     clearShadowLayer()
                 }
-                val layout3d = buildLayout(text, shadowPaint, maxWidth, alignment)
+                val layout3d = buildLayout(text, shadowPaint, maxWidth, alignment, lineSpacingMult)
                 for (layer in 5 downTo 1) {
                     canvas.save()
                     canvas.translate(step * layer, step * layer)
                     layout3d.draw(canvas)
                     canvas.restore()
                 }
-                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment, lineSpacingMult).draw(canvas)
             }
         }
     }
@@ -820,13 +888,14 @@ object LyricFrameRenderer {
         lines: List<LyricLine>,
         activeIdx: Int,
         posMs: Long,
-        typeface: Typeface
+        typeface: Typeface,
+        outlinePassOnly: Boolean = false
     ) {
         val maxWidth = (canvasWidth * 0.82f).toInt().coerceAtLeast(100)
         val currentIdx = activeIdx.coerceAtLeast(0)
         val anim = computeAnimation(canvasWidth, config, lines, currentIdx, posMs)
-        val prevLine = lines.getOrNull(currentIdx - 1)
-        val nextLine = lines.getOrNull(currentIdx + 1)
+        val prevLine = if (outlinePassOnly) null else lines.getOrNull(currentIdx - 1)
+        val nextLine = if (outlinePassOnly) null else lines.getOrNull(currentIdx + 1)
         val align = layoutAlignmentFor(config.textAlignment)
 
         val activePaint = createTextPaint(
@@ -861,7 +930,7 @@ object LyricFrameRenderer {
         canvas.save()
         canvas.scale(anim.scale, anim.scale)
         canvas.translate(-maxWidth / 2f, activeTop)
-        drawStyledLayout(canvas, anim.text, activePaint, maxWidth, config, posMs, anim.alpha)
+        drawStyledLayout(canvas, anim.text, activePaint, maxWidth, config, posMs, anim.alpha, outlinePassOnly)
         canvas.restore()
 
         nextLayout?.let {
@@ -879,7 +948,8 @@ object LyricFrameRenderer {
         lines: List<LyricLine>,
         activeIdx: Int,
         posMs: Long,
-        typeface: Typeface
+        typeface: Typeface,
+        outlinePassOnly: Boolean = false
     ) {
         val maxWidth = (canvasWidth * 0.84f).toInt().coerceAtLeast(100)
         val currentIdx = activeIdx.coerceAtLeast(0)
@@ -898,7 +968,7 @@ object LyricFrameRenderer {
         canvas.translate(0f, anim.offsetY)
         canvas.scale(anim.scale, anim.scale)
         canvas.translate(-maxWidth / 2f, -layout.height / 2f)
-        drawStyledLayout(canvas, anim.text, paint, maxWidth, config, posMs, anim.alpha)
+        drawStyledLayout(canvas, anim.text, paint, maxWidth, config, posMs, anim.alpha, outlinePassOnly)
         canvas.restore()
     }
 
@@ -909,7 +979,8 @@ object LyricFrameRenderer {
         lines: List<LyricLine>,
         activeIdx: Int,
         posMs: Long,
-        typeface: Typeface
+        typeface: Typeface,
+        outlinePassOnly: Boolean = false
     ) {
         val maxTextW = (canvasWidth * 0.74f).toInt().coerceAtLeast(100)
         val currentIdx = activeIdx.coerceAtLeast(0)
@@ -943,24 +1014,26 @@ object LyricFrameRenderer {
         val cardH = contentH + padV * 2f
 
         val cardRect = RectF(-cardW / 2f, -cardH / 2f, cardW / 2f, cardH / 2f)
-        val cardBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(190, 16, 16, 26) }
-        val cardBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = max(2f, canvasWidth * 0.0032f)
-            color = ColorUtils.setAlphaComponent(config.accentColor, 185)
-        }
-        val corner = canvasWidth * 0.048f
 
         canvas.save()
         canvas.translate(0f, anim.offsetY)
         canvas.scale(anim.scale, anim.scale)
-        canvas.drawRoundRect(cardRect, corner, corner, cardBg)
-        canvas.drawRoundRect(cardRect, corner, corner, cardBorder)
+        if (!outlinePassOnly) {
+            val cardBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(190, 16, 16, 26) }
+            val cardBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = max(2f, canvasWidth * 0.0032f)
+                color = ColorUtils.setAlphaComponent(config.accentColor, 185)
+            }
+            val corner = canvasWidth * 0.048f
+            canvas.drawRoundRect(cardRect, corner, corner, cardBg)
+            canvas.drawRoundRect(cardRect, corner, corner, cardBorder)
+        }
 
         canvas.save()
         canvas.translate(-maxTextW / 2f, cardRect.top + padV)
-        drawStyledLayout(canvas, anim.text, mainPaint, maxTextW, config, posMs, anim.alpha)
-        if (nextLayout != null) {
+        drawStyledLayout(canvas, anim.text, mainPaint, maxTextW, config, posMs, anim.alpha, outlinePassOnly)
+        if (!outlinePassOnly && nextLayout != null) {
             canvas.translate(0f, mainLayout.height + gap)
             nextLayout.draw(canvas)
         }
@@ -975,7 +1048,8 @@ object LyricFrameRenderer {
         lines: List<LyricLine>,
         activeIdx: Int,
         posMs: Long,
-        typeface: Typeface
+        typeface: Typeface,
+        outlinePassOnly: Boolean = false
     ) {
         val maxTextW = (canvasWidth * 0.76f).toInt().coerceAtLeast(100)
         val currentIdx = activeIdx.coerceAtLeast(0)
@@ -995,24 +1069,25 @@ object LyricFrameRenderer {
         val boxH = layout.height + padV * 2f
         val boxRect = RectF(-boxW / 2f, -boxH / 2f, boxW / 2f, boxH / 2f)
 
-        val hasContrast = ColorUtils.calculateContrast(config.textColor, config.accentColor) >= 2.2
-        val baseBoxColor = when {
-            config.animation == LyricAnimation.KARAOKE -> Color.rgb(16, 16, 24)
-            hasContrast -> config.accentColor
-            ColorUtils.calculateLuminance(config.textColor) > 0.45 -> Color.rgb(16, 16, 24)
-            else -> Color.rgb(250, 250, 252)
-        }
-        val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = ColorUtils.setAlphaComponent(baseBoxColor, (anim.alpha * 0.92f).toInt().coerceIn(60, 240))
-        }
-        val radius = canvasWidth * 0.036f
-
         canvas.save()
         canvas.translate(0f, anim.offsetY)
         canvas.scale(anim.scale, anim.scale)
-        canvas.drawRoundRect(boxRect, radius, radius, boxPaint)
+        if (!outlinePassOnly) {
+            val hasContrast = ColorUtils.calculateContrast(config.textColor, config.accentColor) >= 2.2
+            val baseBoxColor = when {
+                config.animation == LyricAnimation.KARAOKE -> Color.rgb(16, 16, 24)
+                hasContrast -> config.accentColor
+                ColorUtils.calculateLuminance(config.textColor) > 0.45 -> Color.rgb(16, 16, 24)
+                else -> Color.rgb(250, 250, 252)
+            }
+            val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = ColorUtils.setAlphaComponent(baseBoxColor, (anim.alpha * 0.92f).toInt().coerceIn(60, 240))
+            }
+            val radius = canvasWidth * 0.036f
+            canvas.drawRoundRect(boxRect, radius, radius, boxPaint)
+        }
         canvas.translate(-maxTextW / 2f, -layout.height / 2f)
-        drawStyledLayout(canvas, anim.text, paint, maxTextW, config, posMs, anim.alpha)
+        drawStyledLayout(canvas, anim.text, paint, maxTextW, config, posMs, anim.alpha, outlinePassOnly)
         canvas.restore()
     }
 
@@ -1023,7 +1098,8 @@ object LyricFrameRenderer {
         lines: List<LyricLine>,
         activeIdx: Int,
         posMs: Long,
-        typeface: Typeface
+        typeface: Typeface,
+        outlinePassOnly: Boolean = false
     ) {
         val maxWidth = (canvasWidth * 0.84f).toInt().coerceAtLeast(100)
         val currentIdx = activeIdx.coerceAtLeast(0)
@@ -1042,25 +1118,27 @@ object LyricFrameRenderer {
         canvas.translate(0f, anim.offsetY)
         canvas.scale(anim.scale, anim.scale)
         canvas.translate(-maxWidth / 2f, -layout.height / 2f)
-        drawStyledLayout(canvas, anim.text, paint, maxWidth, config, posMs, anim.alpha)
+        drawStyledLayout(canvas, anim.text, paint, maxWidth, config, posMs, anim.alpha, outlinePassOnly)
 
-        val barW = canvasWidth * 0.18f
-        val barH = max(4f, canvasWidth * 0.007f)
-        val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = ColorUtils.setAlphaComponent(config.accentColor, anim.alpha)
+        if (!outlinePassOnly) {
+            val barW = canvasWidth * 0.18f
+            val barH = max(4f, canvasWidth * 0.007f)
+            val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = ColorUtils.setAlphaComponent(config.accentColor, anim.alpha)
+            }
+            val barLeft = when (config.textAlignment) {
+                LyricAlignment.LEFT -> 0f
+                LyricAlignment.CENTER -> (maxWidth - barW) / 2f
+                LyricAlignment.RIGHT -> maxWidth - barW
+            }
+            val barTop = layout.height + canvasWidth * 0.024f
+            canvas.drawRoundRect(
+                RectF(barLeft, barTop, barLeft + barW, barTop + barH),
+                barH / 2f,
+                barH / 2f,
+                barPaint
+            )
         }
-        val barLeft = when (config.textAlignment) {
-            LyricAlignment.LEFT -> 0f
-            LyricAlignment.CENTER -> (maxWidth - barW) / 2f
-            LyricAlignment.RIGHT -> maxWidth - barW
-        }
-        val barTop = layout.height + canvasWidth * 0.024f
-        canvas.drawRoundRect(
-            RectF(barLeft, barTop, barLeft + barW, barTop + barH),
-            barH / 2f,
-            barH / 2f,
-            barPaint
-        )
         canvas.restore()
     }
 
@@ -1075,7 +1153,8 @@ object LyricFrameRenderer {
         lines: List<LyricLine>,
         activeIdx: Int,
         posMs: Long,
-        typeface: Typeface
+        typeface: Typeface,
+        outlinePassOnly: Boolean = false
     ) {
         val maxWidth = (canvasWidth * 0.84f).toInt().coerceAtLeast(100)
         val currentIdx = activeIdx.coerceAtLeast(0)
@@ -1096,44 +1175,45 @@ object LyricFrameRenderer {
         val activeLayout = buildLayout(anim.text, activePaint, maxWidth, align)
         val gap = canvasWidth * 0.026f
 
-        // Base de la pila (verso activo)
         val baseTop = -activeLayout.height / 2f
         val slidePush = (1f - pushProgress) * (activeLayout.height + gap)
 
-        var cursorTop = baseTop + slidePush - gap
-        for (age in 1..3) {
-            val prevIdx = currentIdx - age
-            if (prevIdx < 0) break
-            val prevLine = lines[prevIdx]
-            val (targetScale, targetAlpha) = when (age) {
-                1 -> 0.93f to 205
-                2 -> 0.87f to 140
-                else -> 0.81f to (85f * (1f - pushProgress * 0.5f)).toInt().coerceIn(20, 85)
-            }
-            val prevPaint = createTextPaint(
-                color = ColorUtils.setAlphaComponent(config.textColor, targetAlpha),
-                textSize = canvasWidth * 0.056f,
-                typeface = typeface,
-                shadowRadius = canvasWidth * 0.01f,
-                shadowColor = Color.argb(140, 0, 0, 0)
-            )
-            val prevLayout = buildLayout(prevLine.text, prevPaint, maxWidth, align)
-            val scaledH = prevLayout.height * targetScale
-            cursorTop -= scaledH
+        if (!outlinePassOnly) {
+            var cursorTop = baseTop + slidePush - gap
+            for (age in 1..3) {
+                val prevIdx = currentIdx - age
+                if (prevIdx < 0) break
+                val prevLine = lines[prevIdx]
+                val (targetScale, targetAlpha) = when (age) {
+                    1 -> 0.93f to 205
+                    2 -> 0.87f to 140
+                    else -> 0.81f to (85f * (1f - pushProgress * 0.5f)).toInt().coerceIn(20, 85)
+                }
+                val prevPaint = createTextPaint(
+                    color = ColorUtils.setAlphaComponent(config.textColor, targetAlpha),
+                    textSize = canvasWidth * 0.056f,
+                    typeface = typeface,
+                    shadowRadius = canvasWidth * 0.01f,
+                    shadowColor = Color.argb(140, 0, 0, 0)
+                )
+                val prevLayout = buildLayout(prevLine.text, prevPaint, maxWidth, align)
+                val scaledH = prevLayout.height * targetScale
+                cursorTop -= scaledH
 
-            val pivotX = when (config.textAlignment) {
-                LyricAlignment.LEFT -> -maxWidth / 2f
-                LyricAlignment.CENTER -> 0f
-                LyricAlignment.RIGHT -> maxWidth / 2f
-            }
-            canvas.save()
-            canvas.translate(0f, cursorTop)
-            canvas.scale(targetScale, targetScale, pivotX, 0f)
-            canvas.translate(-maxWidth / 2f, 0f)
-            prevLayout.draw(canvas)
-            canvas.restore()
+                val pivotX = when (config.textAlignment) {
+                    LyricAlignment.LEFT -> -maxWidth / 2f
+                    LyricAlignment.CENTER -> 0f
+                    LyricAlignment.RIGHT -> maxWidth / 2f
+                }
+                canvas.save()
+                canvas.translate(0f, cursorTop)
+                canvas.scale(targetScale, targetScale, pivotX, 0f)
+                canvas.translate(-maxWidth / 2f, 0f)
+                prevLayout.draw(canvas)
+                canvas.restore()
 
-            cursorTop -= gap * 0.9f
+                cursorTop -= gap * 0.9f
+            }
         }
 
         // Verso activo en la base de la pila
@@ -1141,8 +1221,56 @@ object LyricFrameRenderer {
         canvas.translate(0f, baseTop + anim.offsetY * 0.5f)
         canvas.scale(anim.scale, anim.scale, 0f, activeLayout.height / 2f)
         canvas.translate(-maxWidth / 2f, 0f)
-        drawStyledLayout(canvas, anim.text, activePaint, maxWidth, config, posMs, anim.alpha)
+        drawStyledLayout(canvas, anim.text, activePaint, maxWidth, config, posMs, anim.alpha, outlinePassOnly)
         canvas.restore()
+    }
+
+    /**
+     * Estilo Póster gigante en mayúsculas, diseñado para lucir detrás de la silueta de la persona.
+     */
+    private fun drawPosterStyle(
+        canvas: Canvas,
+        canvasWidth: Int,
+        config: StoryConfig,
+        lines: List<LyricLine>,
+        activeIdx: Int,
+        posMs: Long,
+        typeface: Typeface,
+        outlinePassOnly: Boolean = false
+    ) {
+        val maxWidth = (canvasWidth * 0.90f).toInt().coerceAtLeast(100)
+        val currentIdx = activeIdx.coerceAtLeast(0)
+        val anim = computeAnimation(canvasWidth, config, lines, currentIdx, posMs)
+        val upperText = toUppercasePreservingSpans(anim.text)
+
+        val paint = createTextPaint(
+            color = ColorUtils.setAlphaComponent(config.textColor, anim.alpha),
+            textSize = canvasWidth * 0.105f,
+            typeface = typeface,
+            shadowRadius = anim.glowRadius,
+            shadowColor = anim.glowColor
+        )
+        val layout = buildLayout(upperText, paint, maxWidth, layoutAlignmentFor(config.textAlignment), lineSpacingMult = 0.94f)
+
+        canvas.save()
+        canvas.translate(0f, anim.offsetY)
+        canvas.scale(anim.scale, anim.scale)
+        canvas.translate(-maxWidth / 2f, -layout.height / 2f)
+        drawStyledLayout(canvas, upperText, paint, maxWidth, config, posMs, anim.alpha, outlinePassOnly, lineSpacingMult = 0.94f)
+        canvas.restore()
+    }
+
+    private fun toUppercasePreservingSpans(source: CharSequence): CharSequence {
+        val upper = source.toString().uppercase()
+        if (source !is Spanned) return upper
+        val spannable = SpannableString(upper)
+        val spans = source.getSpans(0, source.length, Any::class.java)
+        for (span in spans) {
+            val start = source.getSpanStart(span).coerceIn(0, upper.length)
+            val end = source.getSpanEnd(span).coerceIn(start, upper.length)
+            spannable.setSpan(span, start, end, source.getSpanFlags(span))
+        }
+        return spannable
     }
 
     private fun drawEmptyHint(
@@ -1178,11 +1306,12 @@ object LyricFrameRenderer {
         text: CharSequence,
         paint: TextPaint,
         maxWidth: Int,
-        alignment: Layout.Alignment = Layout.Alignment.ALIGN_CENTER
+        alignment: Layout.Alignment = Layout.Alignment.ALIGN_CENTER,
+        lineSpacingMult: Float = 1.15f
     ): StaticLayout =
         StaticLayout.Builder.obtain(text, 0, text.length, paint, maxWidth)
             .setAlignment(alignment)
-            .setLineSpacing(0f, 1.15f)
+            .setLineSpacing(0f, lineSpacingMult)
             .setIncludePad(false)
             .build()
 

@@ -58,9 +58,9 @@ class LrcParserAndNormalizerTest {
     @Test
     fun storyStylesFontsAndAnimationsAreAvailable() {
         assertEquals(6, LyricFont.entries.size)
-        assertEquals(6, LyricStyle.entries.size)
+        assertEquals(7, LyricStyle.entries.size)
         assertEquals(6, LyricAnimation.entries.size)
-        assertEquals(6, LyricEffect.entries.size)
+        assertEquals(7, LyricEffect.entries.size)
         assertEquals(4, BrushStyle.entries.size)
         assertEquals(6, PhotoFilter.entries.size)
         assertEquals(3, LyricAlignment.entries.size)

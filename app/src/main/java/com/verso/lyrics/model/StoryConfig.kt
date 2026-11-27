@@ -11,7 +11,8 @@ enum class LyricStyle(val label: String) {
     CARD("Tarjeta"),
     HIGHLIGHT("Etiqueta"),
     CINEMA("Cine"),
-    STACK("Apilado")
+    STACK("Apilado"),
+    POSTER("Póster")
 }
 
 /** Animaciones de entrada y ritmo para el verso activo. */
@@ -31,7 +32,8 @@ enum class LyricEffect(val label: String) {
     OUTLINE("Contorno"),
     GLITCH("Glitch"),
     GRADIENT("Degradado"),
-    SHADOW_3D("3D")
+    SHADOW_3D("3D"),
+    HOLLOW_OVERLAP("Doble capa")
 }
 
 /** Filtros de color aplicados a la foto de fondo. */
