@@ -1,6 +1,7 @@
 package com.verso.lyrics.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,9 +35,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.verso.lyrics.model.LyricsCandidate
 import com.verso.lyrics.ui.theme.VersoAccent
 import com.verso.lyrics.ui.theme.VersoSurface
@@ -67,7 +70,7 @@ fun LyricsCandidatesSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.82f)
+                .fillMaxHeight(0.84f)
                 .padding(horizontal = 16.dp)
         ) {
             Text(
@@ -87,6 +90,7 @@ fun LyricsCandidatesSheet(
                     onValueChange = { titleQuery = it },
                     label = { Text("Título") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.weight(1f)
                 )
                 OutlinedTextField(
@@ -94,12 +98,14 @@ fun LyricsCandidatesSheet(
                     onValueChange = { artistQuery = it },
                     label = { Text("Artista") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.weight(1f)
                 )
             }
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = { onSearchCustom(titleQuery, artistQuery) },
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Rounded.Search, contentDescription = null)
@@ -117,7 +123,7 @@ fun LyricsCandidatesSheet(
                             .weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator()
+                        CircularProgressIndicator(color = VersoAccent)
                     }
                 }
                 is CandidatesUiState.Ready -> {
@@ -146,14 +152,16 @@ fun LyricsCandidatesSheet(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .clip(RoundedCornerShape(14.dp))
                                         .background(VersoSurfaceElevated)
+                                        .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(14.dp))
                                         .clickable { onSelectCandidate(cand) }
                                         .padding(12.dp)
                                 ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
                                             text = "${cand.trackName} — ${cand.artistName}",
@@ -163,15 +171,25 @@ fun LyricsCandidatesSheet(
                                             modifier = Modifier.weight(1f)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = if (cand.synced) "Sincronizada" else "Texto",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (cand.synced) VersoAccent else VersoTextSecondary,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(
+                                                    if (cand.synced) VersoAccent.copy(alpha = 0.18f)
+                                                    else Color.White.copy(alpha = 0.08f)
+                                                )
+                                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                                        ) {
+                                            Text(
+                                                text = if (cand.synced) "Sincronizada" else "Texto",
+                                                fontSize = 10.sp,
+                                                color = if (cand.synced) VersoAccent else VersoTextSecondary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                     if (cand.previewText.isNotBlank()) {
-                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Spacer(modifier = Modifier.height(6.dp))
                                         Text(
                                             text = cand.previewText,
                                             style = MaterialTheme.typography.bodySmall,

@@ -73,6 +73,7 @@ object LyricFrameRenderer {
         positionMs: Long,
         photoBitmap: Bitmap?,
         albumArtBitmap: Bitmap?,
+        foregroundBitmap: Bitmap? = null,
         showCenterGuides: Boolean = false
     ) {
         if (width <= 0 || height <= 0) return
@@ -87,6 +88,45 @@ object LyricFrameRenderer {
             drawCenterGuides(canvas, width, height, config)
         }
 
+        if (lines.isEmpty()) {
+            drawEmptyHint(context, canvas, width, height, config)
+        } else {
+            val effectivePosMs = (positionMs + config.lyricsOffsetMs).coerceAtLeast(0L)
+            val activeIdx = activeLyricIndex(lines, effectivePosMs)
+            val typeface = resolveTypeface(context, config.font)
+
+            canvas.save()
+            val anchorX = width * config.lyricPosX
+            val anchorY = height * config.lyricPosY
+            canvas.translate(anchorX, anchorY)
+            canvas.rotate(config.lyricRotationDeg)
+            canvas.scale(config.lyricScale, config.lyricScale)
+
+            when (config.style) {
+                LyricStyle.SCROLL -> drawScrollStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
+                LyricStyle.FOCUS -> drawFocusStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
+                LyricStyle.CARD -> drawCardStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
+                LyricStyle.HIGHLIGHT -> drawHighlightStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
+                LyricStyle.CINEMA -> drawCinemaStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
+            }
+
+            canvas.restore()
+        }
+
+        // Capa de profundidad: persona recortada encima de las letras
+        if (config.lyricsBehindSubject && foregroundBitmap != null && !foregroundBitmap.isRecycled) {
+            val dstRect = computeCenterCropRect(
+                foregroundBitmap.width.toFloat(),
+                foregroundBitmap.height.toFloat(),
+                width,
+                height
+            )
+            val fgPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                colorFilter = colorFilterFor(config.photoFilter)
+            }
+            canvas.drawBitmap(foregroundBitmap, null, dstRect, fgPaint)
+        }
+
         if (config.showSongBadge && config.track != null) {
             drawSongBadge(
                 canvas = canvas,
@@ -99,32 +139,6 @@ object LyricFrameRenderer {
                 font = resolveTypeface(context, config.font)
             )
         }
-
-        if (lines.isEmpty()) {
-            drawEmptyHint(context, canvas, width, height, config)
-            return
-        }
-
-        val effectivePosMs = (positionMs + config.lyricsOffsetMs).coerceAtLeast(0L)
-        val activeIdx = activeLyricIndex(lines, effectivePosMs)
-        val typeface = resolveTypeface(context, config.font)
-
-        canvas.save()
-        val anchorX = width * config.lyricPosX
-        val anchorY = height * config.lyricPosY
-        canvas.translate(anchorX, anchorY)
-        canvas.rotate(config.lyricRotationDeg)
-        canvas.scale(config.lyricScale, config.lyricScale)
-
-        when (config.style) {
-            LyricStyle.SCROLL -> drawScrollStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-            LyricStyle.FOCUS -> drawFocusStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-            LyricStyle.CARD -> drawCardStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-            LyricStyle.HIGHLIGHT -> drawHighlightStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-            LyricStyle.CINEMA -> drawCinemaStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
-        }
-
-        canvas.restore()
     }
 
     private fun createChalkStampBitmap(size: Int): Bitmap {
@@ -394,6 +408,15 @@ object LyricFrameRenderer {
         }
     }
 
+    private fun computeCenterCropRect(srcW: Float, srcH: Float, dstW: Int, dstH: Int): RectF {
+        val scale = max(dstW / srcW, dstH / srcH)
+        val scaledW = srcW * scale
+        val scaledH = srcH * scale
+        val left = (dstW - scaledW) / 2f
+        val top = (dstH - scaledH) / 2f
+        return RectF(left, top, left + scaledW, top + scaledH)
+    }
+
     private fun drawBackground(
         canvas: Canvas,
         width: Int,
@@ -403,14 +426,7 @@ object LyricFrameRenderer {
         photoFilter: PhotoFilter
     ) {
         if (photoBitmap != null && !photoBitmap.isRecycled) {
-            val srcW = photoBitmap.width.toFloat()
-            val srcH = photoBitmap.height.toFloat()
-            val scale = max(width / srcW, height / srcH)
-            val scaledW = srcW * scale
-            val scaledH = srcH * scale
-            val left = (width - scaledW) / 2f
-            val top = (height - scaledH) / 2f
-            val dstRect = RectF(left, top, left + scaledW, top + scaledH)
+            val dstRect = computeCenterCropRect(photoBitmap.width.toFloat(), photoBitmap.height.toFloat(), width, height)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
                 colorFilter = colorFilterFor(photoFilter)
             }

@@ -100,5 +100,6 @@ data class StoryConfig(
     val lyricPosY: Float = 0.55f,
     val lyricScale: Float = 1.0f,
     val lyricRotationDeg: Float = 0f,
+    val lyricsBehindSubject: Boolean = false,
     val strokes: List<DrawingStroke> = emptyList()
 )

@@ -33,6 +33,7 @@ import com.verso.lyrics.model.LyricsFetchResult
 import com.verso.lyrics.model.LyricsState
 import com.verso.lyrics.model.PhotoFilter
 import com.verso.lyrics.model.StoryConfig
+import com.verso.lyrics.render.SubjectSegmenter
 import com.verso.lyrics.update.AppUpdateManager
 import com.verso.lyrics.update.GithubReleaseInfo
 import java.io.File
@@ -138,8 +139,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _activeStroke = MutableStateFlow<DrawingStroke?>(null)
     val activeStroke: StateFlow<DrawingStroke?> = _activeStroke.asStateFlow()
 
+    private val _foregroundBitmap = MutableStateFlow<Bitmap?>(null)
+    val foregroundBitmap: StateFlow<Bitmap?> = _foregroundBitmap.asStateFlow()
+
+    private val _isSegmentingSubject = MutableStateFlow(false)
+    val isSegmentingSubject: StateFlow<Boolean> = _isSegmentingSubject.asStateFlow()
+
+    private val _segmentationError = MutableStateFlow<String?>(null)
+    val segmentationError: StateFlow<String?> = _segmentationError.asStateFlow()
+
     private var exportJob: Job? = null
     private var updateJob: Job? = null
+    private var segmentJob: Job? = null
 
     init {
         checkForUpdates(silent = true)
@@ -197,6 +208,49 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 extracted.getOrNull(1)?.let { firstAccent ->
                     _config.update { it.copy(accentColor = firstAccent) }
                 }
+                _foregroundBitmap.value = null
+                _segmentationError.value = null
+                if (_config.value.lyricsBehindSubject) {
+                    runSegmentation(bmp)
+                }
+            } else {
+                _foregroundBitmap.value = null
+            }
+        }
+    }
+
+    fun toggleLyricsBehindSubject() {
+        val currentlyOn = _config.value.lyricsBehindSubject
+        if (currentlyOn) {
+            segmentJob?.cancel()
+            _isSegmentingSubject.value = false
+            _segmentationError.value = null
+            _config.update { it.copy(lyricsBehindSubject = false) }
+            return
+        }
+        val bmp = _photoBitmap.value ?: return
+        _segmentationError.value = null
+        if (_foregroundBitmap.value != null) {
+            _config.update { it.copy(lyricsBehindSubject = true) }
+        } else {
+            runSegmentation(bmp)
+        }
+    }
+
+    private fun runSegmentation(bmp: Bitmap) {
+        segmentJob?.cancel()
+        segmentJob = viewModelScope.launch {
+            _isSegmentingSubject.value = true
+            _segmentationError.value = null
+            val fg = SubjectSegmenter.extractForeground(bmp)
+            _isSegmentingSubject.value = false
+            if (fg != null) {
+                _foregroundBitmap.value = fg
+                _config.update { it.copy(lyricsBehindSubject = true) }
+            } else {
+                _foregroundBitmap.value = null
+                _config.update { it.copy(lyricsBehindSubject = false) }
+                _segmentationError.value = "No se detectó una persona en esta foto."
             }
         }
     }
@@ -460,7 +514,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         exportJob = viewModelScope.launch {
             _exportState.value = ExportUiState.Exporting(0f)
             runCatching {
-                videoExporter.exportStory(cfg, lines) { p ->
+                videoExporter.exportStory(cfg, lines, _foregroundBitmap.value) { p ->
                     _exportState.value = ExportUiState.Exporting(p)
                 }
             }.onSuccess { result ->

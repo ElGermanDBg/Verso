@@ -19,6 +19,7 @@ import androidx.core.content.FileProvider
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.StoryConfig
 import com.verso.lyrics.render.LyricFrameRenderer
+import com.verso.lyrics.render.SubjectSegmenter
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -41,11 +42,22 @@ class VideoExporter(private val context: Context) {
     suspend fun exportStory(
         config: StoryConfig,
         lines: List<LyricLine>,
+        foregroundBitmap: Bitmap? = null,
         onProgress: (Float) -> Unit
     ): ExportResult = withContext(Dispatchers.Default) {
         val track = config.track ?: error("Selecciona una canción primero")
         val photoBitmap = config.photoUri?.let { loadBitmap(it, 1080, 1920) }
         val albumArtBitmap = loadBitmap(track.albumArtUri, 256, 256)
+        var createdLocalForeground = false
+        val resolvedForeground: Bitmap? = when {
+            !config.lyricsBehindSubject -> null
+            foregroundBitmap != null && !foregroundBitmap.isRecycled -> foregroundBitmap
+            photoBitmap != null -> {
+                createdLocalForeground = true
+                SubjectSegmenter.extractForeground(photoBitmap)
+            }
+            else -> null
+        }
 
         val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
         val outFile = File(exportsDir, "verso_${System.currentTimeMillis()}.mp4")
@@ -156,6 +168,7 @@ class VideoExporter(private val context: Context) {
                             positionMs = trackPosMs,
                             photoBitmap = photoBitmap,
                             albumArtBitmap = albumArtBitmap,
+                            foregroundBitmap = resolvedForeground,
                             showCenterGuides = false
                         )
                     } finally {
@@ -217,6 +230,7 @@ class VideoExporter(private val context: Context) {
         } finally {
             photoBitmap?.recycle()
             albumArtBitmap?.recycle()
+            if (createdLocalForeground) resolvedForeground?.recycle()
         }
     }
 

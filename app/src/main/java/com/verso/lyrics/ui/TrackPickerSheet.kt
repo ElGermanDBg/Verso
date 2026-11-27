@@ -1,6 +1,7 @@
 package com.verso.lyrics.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,12 +18,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -36,12 +39,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.verso.lyrics.model.LocalTrack
+import com.verso.lyrics.ui.theme.VersoAccent
 import com.verso.lyrics.ui.theme.VersoSurface
 import com.verso.lyrics.ui.theme.VersoSurfaceElevated
 import com.verso.lyrics.ui.theme.VersoTextSecondary
@@ -80,11 +86,24 @@ fun TrackPickerSheet(
                 .fillMaxHeight(0.85f)
                 .padding(horizontal = 16.dp)
         ) {
-            Text(
-                text = "Canciones en tu dispositivo",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Tu música local",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (hasAudioPermission && tracks.isNotEmpty()) {
+                    Text(
+                        text = "${filtered.size} canciones",
+                        fontSize = 12.sp,
+                        color = VersoTextSecondary
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(10.dp))
 
             if (!hasAudioPermission) {
@@ -111,8 +130,15 @@ fun TrackPickerSheet(
                     onValueChange = { query = it },
                     placeholder = { Text("Buscar canción o artista…") },
                     leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Rounded.Close, contentDescription = "Limpiar")
+                            }
+                        }
+                    },
                     singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -125,7 +151,7 @@ fun TrackPickerSheet(
                                 .weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator()
+                            CircularProgressIndicator(color = VersoAccent)
                         }
                     }
                     filtered.isEmpty() -> {
@@ -147,8 +173,9 @@ fun TrackPickerSheet(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .clip(RoundedCornerShape(14.dp))
                                         .background(VersoSurfaceElevated)
+                                        .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(14.dp))
                                         .clickable {
                                             onSelectTrack(track)
                                             onDismiss()
@@ -158,8 +185,8 @@ fun TrackPickerSheet(
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(46.dp)
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .size(48.dp)
+                                            .clip(RoundedCornerShape(10.dp))
                                             .background(VersoSurface),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -192,11 +219,18 @@ fun TrackPickerSheet(
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = formatMs(track.durationMs),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = VersoTextSecondary
-                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color.White.copy(alpha = 0.07f))
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = formatMs(track.durationMs),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = VersoTextSecondary
+                                        )
+                                    }
                                 }
                             }
                         }

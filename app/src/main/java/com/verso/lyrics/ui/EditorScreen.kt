@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -40,6 +41,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.material.icons.automirrored.rounded.Undo
@@ -47,9 +49,11 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.MovieCreation
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -120,11 +124,11 @@ import com.verso.lyrics.ui.theme.VersoTextSecondary
 import com.verso.lyrics.update.AppUpdateManager
 import com.verso.lyrics.update.GithubReleaseInfo
 
-private enum class DockPanel {
-    TRAMO,
-    ESTILO,
-    TEXTO,
-    DIBUJAR
+private enum class DockPanel(val title: String) {
+    TRAMO("Recortar canción"),
+    ESTILO("Estilo y profundidad"),
+    TEXTO("Texto, color y filtro"),
+    DIBUJAR("Dibujar sobre foto")
 }
 
 @Composable
@@ -145,6 +149,9 @@ fun EditorScreen(viewModel: EditorViewModel) {
     val hasPendingUpdate by viewModel.hasPendingUpdate.collectAsStateWithLifecycle()
     val brushConfig by viewModel.brushConfig.collectAsStateWithLifecycle()
     val activeStroke by viewModel.activeStroke.collectAsStateWithLifecycle()
+    val foregroundBitmap by viewModel.foregroundBitmap.collectAsStateWithLifecycle()
+    val isSegmentingSubject by viewModel.isSegmentingSubject.collectAsStateWithLifecycle()
+    val segmentationError by viewModel.segmentationError.collectAsStateWithLifecycle()
 
     val audioPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_AUDIO
@@ -203,61 +210,99 @@ fun EditorScreen(viewModel: EditorViewModel) {
         if (activeStroke == null) config else config.copy(strokes = config.strokes + activeStroke!!)
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(VersoBg)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
-        // Barra superior flotante
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Verso",
-                    style = MaterialTheme.typography.headlineSmall.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        brush = Brush.linearGradient(listOf(VersoAccent, VersoGold))
-                    )
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        Color(config.accentColor).copy(alpha = 0.14f),
+                        Color.Transparent
+                    ),
+                    radius = 900f
                 )
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { lrcFolderLauncher.launch(null) }) {
-                    Icon(
-                        Icons.Rounded.FolderOpen,
-                        contentDescription = "Carpeta .lrc",
-                        tint = VersoTextSecondary
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            // Barra superior refinada
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Verso",
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            brush = Brush.linearGradient(listOf(VersoAccent, VersoGold))
+                        )
                     )
+                    config.track?.let { t ->
+                        Text(
+                            text = "${t.title} • ${t.artist}",
+                            fontSize = 11.sp,
+                            color = VersoTextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
-                Box {
-                    IconButton(onClick = { viewModel.checkForUpdates(silent = false) }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { lrcFolderLauncher.launch(null) },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.06f))
+                    ) {
                         Icon(
-                            Icons.Rounded.SystemUpdate,
-                            contentDescription = "Buscar actualizaciones",
-                            tint = if (hasPendingUpdate) VersoAccent else VersoTextSecondary
+                            Icons.Rounded.FolderOpen,
+                            contentDescription = "Carpeta .lrc",
+                            tint = VersoTextSecondary,
+                            modifier = Modifier.size(19.dp)
                         )
                     }
-                    if (hasPendingUpdate) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 8.dp, end = 8.dp)
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(VersoAccent)
-                        )
-                    }
-                }
 
-                Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Box {
+                        IconButton(
+                            onClick = { viewModel.checkForUpdates(silent = false) },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.06f))
+                        ) {
+                            Icon(
+                                Icons.Rounded.SystemUpdate,
+                                contentDescription = "Buscar actualizaciones",
+                                tint = if (hasPendingUpdate) VersoAccent else VersoTextSecondary,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                        if (hasPendingUpdate) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 5.dp, end = 5.dp)
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(VersoAccent)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
 
                 val exportEnabled = config.track != null
                 Box(
@@ -361,6 +406,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             positionMs = currentPositionMs,
                             photoBitmap = photoBitmap,
                             albumArtBitmap = albumArtBitmap,
+                            foregroundBitmap = foregroundBitmap,
                             showCenterGuides = isDraggingLyric && !isDrawingMode
                         )
                     }
@@ -504,67 +550,103 @@ fun EditorScreen(viewModel: EditorViewModel) {
             }
         }
 
-        // Panel expandible dinámico
+        // Panel expandible dinámico con cabecera limpia
         AnimatedVisibility(
             visible = activePanel != null,
             enter = slideInVertically { it / 2 } + fadeIn(),
             exit = slideOutVertically { it / 2 } + fadeOut()
         ) {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(VersoSurface)
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(VersoSurface.copy(alpha = 0.96f))
+                    .border(1.dp, Color.White.copy(alpha = 0.09f), RoundedCornerShape(22.dp))
             ) {
-                AnimatedContent(
-                    targetState = activePanel,
-                    transitionSpec = { fadeIn() togetherWith fadeOut() },
-                    label = "panelContent"
-                ) { panel ->
-                    when (panel) {
-                        DockPanel.TRAMO -> TramoControls(
-                            config = config,
-                            lyricsState = lyricsState,
-                            currentPositionMs = currentPositionMs,
-                            onClipStartChange = viewModel::setClipStart,
-                            onNudgeStart = viewModel::nudgeClipStart,
-                            onDurationSelect = viewModel::setClipDuration,
-                            onAdjustOffset = viewModel::adjustLyricsOffset,
-                            onResetOffset = viewModel::resetLyricsOffset,
-                            onOpenLinePicker = { showLinePicker = true },
-                            onChangeLyrics = viewModel::openCandidatesPicker
+                activePanel?.let { current ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 6.dp, top = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = current.title,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
-                        DockPanel.ESTILO -> EstiloYAnimacionControls(
-                            config = config,
-                            onSelectStyle = viewModel::setStyle,
-                            onSelectAnimation = viewModel::setAnimation,
-                            onSelectEffect = viewModel::setEffect,
-                            onToggleBadge = viewModel::toggleSongBadge
-                        )
-                        DockPanel.TEXTO -> TextoYColorControls(
-                            config = config,
-                            paletteColors = paletteColors,
-                            onSelectFont = viewModel::setFont,
-                            onSelectAlignment = viewModel::setTextAlignment,
-                            onScaleChange = viewModel::setLyricScale,
-                            onSelectPhotoFilter = viewModel::setPhotoFilter,
-                            onSelectTextColor = viewModel::setTextColor,
-                            onSelectAccentColor = viewModel::setAccentColor,
-                            onDimChange = viewModel::setBackgroundDim
-                        )
-                        DockPanel.DIBUJAR -> DibujarControls(
-                            brushConfig = brushConfig,
-                            paletteColors = paletteColors,
-                            hasStrokes = config.strokes.isNotEmpty(),
-                            onSelectBrush = viewModel::setBrushStyle,
-                            onSelectColor = viewModel::setBrushColor,
-                            onWidthChange = viewModel::setBrushWidth,
-                            onUndo = viewModel::undoLastStroke,
-                            onClear = viewModel::clearAllStrokes
-                        )
-                        null -> Unit
+                        IconButton(onClick = { activePanel = null }, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = "Cerrar panel",
+                                tint = VersoTextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 265.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    AnimatedContent(
+                        targetState = activePanel,
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        label = "panelContent"
+                    ) { panel ->
+                        when (panel) {
+                            DockPanel.TRAMO -> TramoControls(
+                                config = config,
+                                lyricsState = lyricsState,
+                                currentPositionMs = currentPositionMs,
+                                onClipStartChange = viewModel::setClipStart,
+                                onNudgeStart = viewModel::nudgeClipStart,
+                                onDurationSelect = viewModel::setClipDuration,
+                                onAdjustOffset = viewModel::adjustLyricsOffset,
+                                onResetOffset = viewModel::resetLyricsOffset,
+                                onOpenLinePicker = { showLinePicker = true },
+                                onChangeLyrics = viewModel::openCandidatesPicker
+                            )
+                            DockPanel.ESTILO -> EstiloYAnimacionControls(
+                                config = config,
+                                hasPhoto = photoBitmap != null,
+                                isSegmenting = isSegmentingSubject,
+                                segmentationError = segmentationError,
+                                onSelectStyle = viewModel::setStyle,
+                                onSelectAnimation = viewModel::setAnimation,
+                                onSelectEffect = viewModel::setEffect,
+                                onToggleBehindSubject = viewModel::toggleLyricsBehindSubject,
+                                onToggleBadge = viewModel::toggleSongBadge
+                            )
+                            DockPanel.TEXTO -> TextoYColorControls(
+                                config = config,
+                                paletteColors = paletteColors,
+                                onSelectFont = viewModel::setFont,
+                                onSelectAlignment = viewModel::setTextAlignment,
+                                onScaleChange = viewModel::setLyricScale,
+                                onSelectPhotoFilter = viewModel::setPhotoFilter,
+                                onSelectTextColor = viewModel::setTextColor,
+                                onSelectAccentColor = viewModel::setAccentColor,
+                                onDimChange = viewModel::setBackgroundDim
+                            )
+                            DockPanel.DIBUJAR -> DibujarControls(
+                                brushConfig = brushConfig,
+                                paletteColors = paletteColors,
+                                hasStrokes = config.strokes.isNotEmpty(),
+                                onSelectBrush = viewModel::setBrushStyle,
+                                onSelectColor = viewModel::setBrushColor,
+                                onWidthChange = viewModel::setBrushWidth,
+                                onUndo = viewModel::undoLastStroke,
+                                onClear = viewModel::clearAllStrokes
+                            )
+                            null -> Unit
+                        }
                     }
                 }
             }
@@ -627,6 +709,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
             ) {
                 activePanel = if (activePanel == DockPanel.DIBUJAR) null else DockPanel.DIBUJAR
             }
+        }
         }
     }
 
@@ -917,12 +1000,78 @@ private fun TramoControls(
 @Composable
 private fun EstiloYAnimacionControls(
     config: StoryConfig,
+    hasPhoto: Boolean,
+    isSegmenting: Boolean,
+    segmentationError: String?,
     onSelectStyle: (LyricStyle) -> Unit,
     onSelectAnimation: (LyricAnimation) -> Unit,
     onSelectEffect: (LyricEffect) -> Unit,
+    onToggleBehindSubject: () -> Unit,
     onToggleBadge: () -> Unit
 ) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+        // Interruptor de profundidad: letras detrás de la persona
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    if (config.lyricsBehindSubject) VersoAccent.copy(alpha = 0.16f) else VersoSurfaceElevated
+                )
+                .border(
+                    width = 1.dp,
+                    color = if (config.lyricsBehindSubject) VersoAccent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.06f),
+                    shape = RoundedCornerShape(14.dp)
+                )
+                .clickable(enabled = hasPhoto && !isSegmenting) { onToggleBehindSubject() }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Layers,
+                    contentDescription = null,
+                    tint = if (config.lyricsBehindSubject) VersoAccent else Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "Letras detrás de la persona",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    val subtitle = when {
+                        !hasPhoto -> "Elige una foto primero"
+                        isSegmenting -> "Recortando persona…"
+                        segmentationError != null -> segmentationError
+                        config.lyricsBehindSubject -> "Efecto profundidad activo"
+                        else -> "IA local sobre tu foto"
+                    }
+                    Text(
+                        text = subtitle,
+                        fontSize = 11.sp,
+                        color = if (segmentationError != null) VersoAccent else VersoTextSecondary
+                    )
+                }
+            }
+            if (isSegmenting) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = VersoAccent)
+            } else {
+                Switch(
+                    checked = config.lyricsBehindSubject,
+                    onCheckedChange = { if (hasPhoto) onToggleBehindSubject() },
+                    enabled = hasPhoto
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
         Text("Estilo", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
         Spacer(modifier = Modifier.height(4.dp))
         Row(

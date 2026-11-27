@@ -12,8 +12,8 @@ android {
         applicationId = "com.verso.lyrics"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.5.0"
+        versionCode = 7
+        versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -72,6 +72,7 @@ dependencies {
 
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.palette:palette-ktx:1.0.0")
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20231013")
