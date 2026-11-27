@@ -13,6 +13,7 @@ import com.verso.lyrics.model.LyricStyle
 import com.verso.lyrics.model.LyricsNormalizer
 import com.verso.lyrics.model.PhotoFilter
 import com.verso.lyrics.model.activeLyricIndex
+import com.verso.lyrics.render.SubjectSegmenter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -98,5 +99,52 @@ class LrcParserAndNormalizerTest {
         // Silencio produce ceros
         val silent = AudioBeatAnalyzer.computeBeatLevels(FloatArray(10) { 0f })
         assertEquals(0.0f, silent.max(), 0.001f)
+    }
+
+    @Test
+    fun smartBrushRespectsColorBoundariesAndRadius() {
+        // Mismo color en el centro: agrega persona con alpha alto
+        val sameColor = SubjectSegmenter.computeSmartBrushAlpha(
+            oldAlpha = 0,
+            dist = 2f,
+            radius = 20f,
+            colorDist = 5f,
+            colorTolerance = 46f,
+            addMode = true
+        )
+        assert(sameColor >= 240)
+
+        // Color muy distinto (fondo) dentro del radio: no lo agrega
+        val diffColor = SubjectSegmenter.computeSmartBrushAlpha(
+            oldAlpha = 0,
+            dist = 5f,
+            radius = 20f,
+            colorDist = 110f,
+            colorTolerance = 46f,
+            addMode = true
+        )
+        assertEquals(0, diffColor)
+
+        // Modo borrar (- Fondo) con color similar: borra la máscara
+        val eraseSimilar = SubjectSegmenter.computeSmartBrushAlpha(
+            oldAlpha = 255,
+            dist = 2f,
+            radius = 20f,
+            colorDist = 6f,
+            colorTolerance = 46f,
+            addMode = false
+        )
+        assert(eraseSimilar <= 15)
+
+        // Fuera del radio: conserva el valor anterior
+        val outside = SubjectSegmenter.computeSmartBrushAlpha(
+            oldAlpha = 180,
+            dist = 25f,
+            radius = 20f,
+            colorDist = 0f,
+            colorTolerance = 46f,
+            addMode = true
+        )
+        assertEquals(180, outside)
     }
 }

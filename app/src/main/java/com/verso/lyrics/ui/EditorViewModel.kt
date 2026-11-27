@@ -162,6 +162,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _segmentationError = MutableStateFlow<String?>(null)
     val segmentationError: StateFlow<String?> = _segmentationError.asStateFlow()
 
+    private val _maskSmartBrush = MutableStateFlow(true)
+    val maskSmartBrush: StateFlow<Boolean> = _maskSmartBrush.asStateFlow()
+
+    private val _canUndoMask = MutableStateFlow(false)
+    val canUndoMask: StateFlow<Boolean> = _canUndoMask.asStateFlow()
+
+    private val maskUndoStack = ArrayDeque<Bitmap>()
+
     private val _beatEnvelope = MutableStateFlow<BeatEnvelope?>(null)
     val beatEnvelope: StateFlow<BeatEnvelope?> = _beatEnvelope.asStateFlow()
 
@@ -231,6 +239,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 _foregroundBitmap.value = null
                 _subjectMaskBitmap.value = null
+                clearMaskUndoHistory()
                 _maskVersion.value += 1
                 _segmentationError.value = null
                 if (_config.value.lyricsBehindSubject) {
@@ -280,21 +289,68 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _maskAddMode.value = add
     }
 
+    fun setMaskSmartBrush(enabled: Boolean) {
+        _maskSmartBrush.value = enabled
+    }
+
     fun setMaskBrushRadius(norm: Float) {
-        _maskBrushRadiusNorm.value = norm.coerceIn(0.015f, 0.14f)
+        _maskBrushRadiusNorm.value = norm.coerceIn(0.01f, 0.12f)
+    }
+
+    fun pushMaskUndoSnapshot() {
+        val current = _subjectMaskBitmap.value ?: return
+        if (current.isRecycled) return
+        val snapshot = current.copy(Bitmap.Config.ARGB_8888, true) ?: return
+        maskUndoStack.addLast(snapshot)
+        while (maskUndoStack.size > 10) {
+            val oldest = maskUndoStack.removeFirst()
+            if (!oldest.isRecycled) oldest.recycle()
+        }
+        _canUndoMask.value = maskUndoStack.isNotEmpty()
+    }
+
+    fun undoMaskStroke() {
+        if (maskUndoStack.isEmpty()) return
+        val prev = maskUndoStack.removeLast()
+        _subjectMaskBitmap.value = prev
+        _canUndoMask.value = maskUndoStack.isNotEmpty()
+        _maskVersion.value += 1
+        commitMaskToForeground()
+    }
+
+    private fun clearMaskUndoHistory() {
+        while (maskUndoStack.isNotEmpty()) {
+            val bmp = maskUndoStack.removeFirst()
+            if (!bmp.isRecycled) bmp.recycle()
+        }
+        _canUndoMask.value = false
     }
 
     fun paintMaskStroke(x1: Float, y1: Float, x2: Float, y2: Float, radiusMaskPx: Float) {
         val mask = _subjectMaskBitmap.value ?: return
-        SubjectSegmenter.paintMaskSegment(
-            maskBitmap = mask,
-            x1 = x1,
-            y1 = y1,
-            x2 = x2,
-            y2 = y2,
-            radiusPx = radiusMaskPx,
-            addMode = _maskAddMode.value
-        )
+        val photo = _photoBitmap.value
+        if (_maskSmartBrush.value && photo != null) {
+            SubjectSegmenter.paintSmartMaskSegment(
+                sourceBitmap = photo,
+                maskBitmap = mask,
+                x1 = x1,
+                y1 = y1,
+                x2 = x2,
+                y2 = y2,
+                radiusPx = radiusMaskPx,
+                addMode = _maskAddMode.value
+            )
+        } else {
+            SubjectSegmenter.paintMaskSegment(
+                maskBitmap = mask,
+                x1 = x1,
+                y1 = y1,
+                x2 = x2,
+                y2 = y2,
+                radiusPx = radiusMaskPx,
+                addMode = _maskAddMode.value
+            )
+        }
         _maskVersion.value += 1
     }
 
@@ -314,11 +370,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun resetMaskWithAi() {
         val photo = _photoBitmap.value ?: return
+        pushMaskUndoSnapshot()
         runSegmentation(photo)
     }
 
     fun clearMask() {
         val photo = _photoBitmap.value ?: return
+        pushMaskUndoSnapshot()
         val empty = SubjectSegmenter.createEmptyMask(photo)
         _subjectMaskBitmap.value = empty
         _maskVersion.value += 1
@@ -733,6 +791,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        clearMaskUndoHistory()
         player.release()
     }
 }

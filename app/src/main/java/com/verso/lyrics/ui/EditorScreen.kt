@@ -18,6 +18,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -82,15 +86,20 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -159,6 +168,8 @@ fun EditorScreen(viewModel: EditorViewModel) {
     val segmentationError by viewModel.segmentationError.collectAsStateWithLifecycle()
     val beatEnvelope by viewModel.beatEnvelope.collectAsStateWithLifecycle()
     val isAnalyzingBeat by viewModel.isAnalyzingBeat.collectAsStateWithLifecycle()
+    val maskSmartBrush by viewModel.maskSmartBrush.collectAsStateWithLifecycle()
+    val canUndoMask by viewModel.canUndoMask.collectAsStateWithLifecycle()
 
     val audioPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_AUDIO
@@ -176,7 +187,17 @@ fun EditorScreen(viewModel: EditorViewModel) {
     var activePanel by remember { mutableStateOf<DockPanel?>(null) }
     var isDraggingLyric by remember { mutableStateOf(false) }
     var isMaskEditMode by remember { mutableStateOf(false) }
-    var lastMaskPoint by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var maskZoom by remember { mutableFloatStateOf(1f) }
+    var maskPan by remember { mutableStateOf(Offset.Zero) }
+    var activeMaskCursor by remember { mutableStateOf<Offset?>(null) }
+
+    LaunchedEffect(isMaskEditMode) {
+        if (!isMaskEditMode) {
+            maskZoom = 1f
+            maskPan = Offset.Zero
+            activeMaskCursor = null
+        }
+    }
 
     LaunchedEffect(activePanel) {
         if (activePanel != DockPanel.ESTILO && isMaskEditMode) {
@@ -361,54 +382,86 @@ fun EditorScreen(viewModel: EditorViewModel) {
                 .padding(horizontal = 16.dp, vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {
+            val currentMaskZoom by rememberUpdatedState(maskZoom)
+            val currentMaskPan by rememberUpdatedState(maskPan)
+            val currentMaskBrushRadius by rememberUpdatedState(maskBrushRadiusNorm)
+            val currentSubjectMask by rememberUpdatedState(subjectMaskBitmap)
             Box(
                 modifier = Modifier
                     .aspectRatio(9f / 16f)
                     .clip(RoundedCornerShape(24.dp))
                     .background(VersoSurface)
                     .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(24.dp))
-                    .pointerInput(isDrawingMode, isMaskEditMode, subjectMaskBitmap, maskBrushRadiusNorm) {
+                    .pointerInput(isDrawingMode, isMaskEditMode) {
                         if (isMaskEditMode) {
-                            detectDragGestures(
-                                onDragStart = { offset ->
-                                    val mask = subjectMaskBitmap ?: return@detectDragGestures
-                                    val rect = LyricFrameRenderer.computeCenterCropRect(
-                                        mask.width.toFloat(),
-                                        mask.height.toFloat(),
-                                        size.width,
-                                        size.height
-                                    )
-                                    val mx = ((offset.x - rect.left) / rect.width()) * mask.width
-                                    val my = ((offset.y - rect.top) / rect.height()) * mask.height
-                                    val radiusMaskPx = maskBrushRadiusNorm * mask.width
-                                    lastMaskPoint = mx to my
-                                    viewModel.paintMaskStroke(mx, my, mx + 0.5f, my + 0.5f, radiusMaskPx)
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    val mask = subjectMaskBitmap ?: return@detectDragGestures
-                                    val rect = LyricFrameRenderer.computeCenterCropRect(
-                                        mask.width.toFloat(),
-                                        mask.height.toFloat(),
-                                        size.width,
-                                        size.height
-                                    )
-                                    val mx = ((change.position.x - rect.left) / rect.width()) * mask.width
-                                    val my = ((change.position.y - rect.top) / rect.height()) * mask.height
-                                    val prev = lastMaskPoint ?: (mx to my)
-                                    val radiusMaskPx = maskBrushRadiusNorm * mask.width
-                                    viewModel.paintMaskStroke(prev.first, prev.second, mx, my, radiusMaskPx)
-                                    lastMaskPoint = mx to my
-                                },
-                                onDragEnd = {
-                                    lastMaskPoint = null
-                                    viewModel.commitMaskToForeground()
-                                },
-                                onDragCancel = {
-                                    lastMaskPoint = null
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                var isMultiTouch = false
+                                var didPaint = false
+                                var prevMaskPt: Pair<Float, Float>? = null
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val pressed = event.changes.filter { it.pressed }
+                                    if (pressed.isEmpty()) break
+
+                                    if (pressed.size >= 2) {
+                                        if (!isMultiTouch) {
+                                            isMultiTouch = true
+                                            activeMaskCursor = null
+                                            if (didPaint) {
+                                                viewModel.commitMaskToForeground()
+                                                didPaint = false
+                                            }
+                                            prevMaskPt = null
+                                        }
+                                        val zoomFactor = event.calculateZoom()
+                                        val panDelta = event.calculatePan()
+                                        val newZoom = (maskZoom * zoomFactor).coerceIn(1f, 5f)
+                                        val maxPanX = size.width * (newZoom - 1f) / 2f
+                                        val maxPanY = size.height * (newZoom - 1f) / 2f
+                                        maskZoom = newZoom
+                                        maskPan = Offset(
+                                            x = (maskPan.x + panDelta.x).coerceIn(-maxPanX, maxPanX),
+                                            y = (maskPan.y + panDelta.y).coerceIn(-maxPanY, maxPanY)
+                                        )
+                                        event.changes.forEach { it.consume() }
+                                    } else if (!isMultiTouch) {
+                                        val change = pressed.first()
+                                        val pos = change.position
+                                        activeMaskCursor = pos
+                                        val mask = currentSubjectMask
+                                        if (mask != null && !mask.isRecycled) {
+                                            val zoomVal = currentMaskZoom.coerceAtLeast(1f)
+                                            val panVal = currentMaskPan
+                                            val u = (pos.x - size.width / 2f - panVal.x) / zoomVal + size.width / 2f
+                                            val v = (pos.y - size.height / 2f - panVal.y) / zoomVal + size.height / 2f
+                                            val rect = LyricFrameRenderer.computeCenterCropRect(
+                                                mask.width.toFloat(),
+                                                mask.height.toFloat(),
+                                                size.width,
+                                                size.height
+                                            )
+                                            val mx = ((u - rect.left) / rect.width()) * mask.width
+                                            val my = ((v - rect.top) / rect.height()) * mask.height
+                                            val radiusMaskPx = (currentMaskBrushRadius * mask.width) / zoomVal
+                                            if (!didPaint) {
+                                                viewModel.pushMaskUndoSnapshot()
+                                                didPaint = true
+                                                viewModel.paintMaskStroke(mx, my, mx + 0.5f, my + 0.5f, radiusMaskPx)
+                                            } else {
+                                                val prev = prevMaskPt ?: (mx to my)
+                                                viewModel.paintMaskStroke(prev.first, prev.second, mx, my, radiusMaskPx)
+                                            }
+                                            prevMaskPt = mx to my
+                                        }
+                                        change.consume()
+                                    }
+                                }
+                                activeMaskCursor = null
+                                if (didPaint) {
                                     viewModel.commitMaskToForeground()
                                 }
-                            )
+                            }
                         } else if (isDrawingMode) {
                             detectDragGestures(
                                 onDragStart = { offset ->
@@ -451,7 +504,16 @@ fun EditorScreen(viewModel: EditorViewModel) {
                         }
                     }
             ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = if (isMaskEditMode) maskZoom else 1f
+                            scaleY = if (isMaskEditMode) maskZoom else 1f
+                            translationX = if (isMaskEditMode) maskPan.x else 0f
+                            translationY = if (isMaskEditMode) maskPan.y else 0f
+                        }
+                ) {
                     // Leer maskVersion asegura redibujo inmediato mientras se pinta la silueta
                     val currentMaskVer = maskVersion
                     val currentBeatPulse = if (renderConfig.beatPulseEnabled) {
@@ -479,6 +541,26 @@ fun EditorScreen(viewModel: EditorViewModel) {
                     }
                 }
 
+                // Guía visual del tamaño exacto del pincel al editar el contorno
+                if (isMaskEditMode && activeMaskCursor != null) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val center = activeMaskCursor ?: return@Canvas
+                        val radiusPx = maskBrushRadiusNorm * size.width
+                        val ringColor = if (maskAddMode) Color(0xFFFF5C8A) else Color(0xFF4CC9F0)
+                        drawCircle(
+                            color = ringColor.copy(alpha = 0.9f),
+                            radius = radiusPx,
+                            center = center,
+                            style = Stroke(width = 2.dp.toPx())
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.85f),
+                            radius = 2.dp.toPx(),
+                            center = center
+                        )
+                    }
+                }
+
                 // Indicador de modo dibujo o edición de silueta sobre la foto
                 if (isDrawingMode || isMaskEditMode) {
                     Row(
@@ -491,11 +573,24 @@ fun EditorScreen(viewModel: EditorViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (isMaskEditMode) "Pinta la persona en rosa" else "Traza sobre la foto",
+                            text = if (isMaskEditMode) "2 dedos: zoom • 1 dedo: pintar" else "Traza sobre la foto",
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium
                         )
+                        if (isMaskEditMode && maskZoom > 1.05f) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "${String.format(java.util.Locale.US, "%.1f", maskZoom)}x • 1x",
+                                color = VersoGold,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.clickable {
+                                    maskZoom = 1f
+                                    maskPan = Offset.Zero
+                                }
+                            )
+                        }
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Listo",
@@ -690,10 +785,14 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             DockPanel.ESTILO -> if (isMaskEditMode) {
                                 MaskEditControls(
                                     addMode = maskAddMode,
+                                    smartBrush = maskSmartBrush,
+                                    canUndo = canUndoMask,
                                     brushRadiusNorm = maskBrushRadiusNorm,
                                     isSegmenting = isSegmentingSubject,
                                     onSetAddMode = viewModel::setMaskAddMode,
+                                    onToggleSmartBrush = viewModel::setMaskSmartBrush,
                                     onBrushRadiusChange = viewModel::setMaskBrushRadius,
+                                    onUndo = viewModel::undoMaskStroke,
                                     onAutoAi = viewModel::resetMaskWithAi,
                                     onClear = viewModel::clearMask,
                                     onDone = {
@@ -1096,10 +1195,14 @@ private fun TramoControls(
 @Composable
 private fun MaskEditControls(
     addMode: Boolean,
+    smartBrush: Boolean,
+    canUndo: Boolean,
     brushRadiusNorm: Float,
     isSegmenting: Boolean,
     onSetAddMode: (Boolean) -> Unit,
+    onToggleSmartBrush: (Boolean) -> Unit,
     onBrushRadiusChange: (Float) -> Unit,
+    onUndo: () -> Unit,
     onAutoAi: () -> Unit,
     onClear: () -> Unit,
     onDone: () -> Unit
@@ -1110,18 +1213,29 @@ private fun MaskEditControls(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 FilterChip(
                     selected = addMode,
                     onClick = { onSetAddMode(true) },
-                    label = { Text("+ Persona", fontSize = 12.sp) }
+                    label = { Text("+ Persona", fontSize = 11.sp) }
                 )
                 FilterChip(
                     selected = !addMode,
                     onClick = { onSetAddMode(false) },
-                    label = { Text("- Fondo", fontSize = 12.sp) }
+                    label = { Text("- Fondo", fontSize = 11.sp) }
+                )
+                FilterChip(
+                    selected = smartBrush,
+                    onClick = { onToggleSmartBrush(!smartBrush) },
+                    label = { Text("Borde IA", fontSize = 11.sp) }
                 )
             }
+            Spacer(modifier = Modifier.width(6.dp))
             Button(
                 onClick = onDone,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
@@ -1142,7 +1256,7 @@ private fun MaskEditControls(
             Slider(
                 value = brushRadiusNorm,
                 onValueChange = onBrushRadiusChange,
-                valueRange = 0.015f..0.14f,
+                valueRange = 0.01f..0.12f,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1151,11 +1265,14 @@ private fun MaskEditControls(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            TextButton(onClick = onUndo, enabled = canUndo) {
+                Text("Deshacer", fontSize = 12.sp)
+            }
             TextButton(onClick = onAutoAi, enabled = !isSegmenting) {
                 Text(if (isSegmenting) "Detectando…" else "Auto IA", fontSize = 12.sp)
             }
             TextButton(onClick = onClear) {
-                Text("Limpiar todo", fontSize = 12.sp, color = VersoAccent)
+                Text("Limpiar", fontSize = 12.sp, color = VersoAccent)
             }
         }
     }
