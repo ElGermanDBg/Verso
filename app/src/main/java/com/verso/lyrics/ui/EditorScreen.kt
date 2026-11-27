@@ -100,12 +100,14 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.verso.lyrics.model.BrushStyle
+import com.verso.lyrics.model.LyricAlignment
 import com.verso.lyrics.model.LyricAnimation
 import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
 import com.verso.lyrics.model.LyricsState
+import com.verso.lyrics.model.PhotoFilter
 import com.verso.lyrics.model.StoryConfig
 import com.verso.lyrics.model.activeLyricIndex
 import com.verso.lyrics.render.LyricFrameRenderer
@@ -545,6 +547,9 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             config = config,
                             paletteColors = paletteColors,
                             onSelectFont = viewModel::setFont,
+                            onSelectAlignment = viewModel::setTextAlignment,
+                            onScaleChange = viewModel::setLyricScale,
+                            onSelectPhotoFilter = viewModel::setPhotoFilter,
                             onSelectTextColor = viewModel::setTextColor,
                             onSelectAccentColor = viewModel::setAccentColor,
                             onDimChange = viewModel::setBackgroundDim
@@ -1016,7 +1021,12 @@ private fun DibujarControls(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 BrushStyle.entries.forEach { brush ->
                     FilterChip(
                         selected = brushConfig.style == brush,
@@ -1093,10 +1103,38 @@ private fun TextoYColorControls(
     config: StoryConfig,
     paletteColors: List<Int>,
     onSelectFont: (LyricFont) -> Unit,
+    onSelectAlignment: (LyricAlignment) -> Unit,
+    onScaleChange: (Float) -> Unit,
+    onSelectPhotoFilter: (PhotoFilter) -> Unit,
     onSelectTextColor: (Int) -> Unit,
     onSelectAccentColor: (Int) -> Unit,
     onDimChange: (Float) -> Unit
 ) {
+    var editingAccent by remember { mutableStateOf(false) }
+
+    val colorChoices = remember(paletteColors) {
+        (listOf(
+            0xFFFFFFFF.toInt(),
+            0xFF111118.toInt(),
+            0xFFFF5C8A.toInt(),
+            0xFFEF4444.toInt(),
+            0xFFFF8A5B.toInt(),
+            0xFFFFD166.toInt(),
+            0xFFA3E635.toInt(),
+            0xFF4ADE80.toInt(),
+            0xFF2DD4BF.toInt(),
+            0xFF38BDF8.toInt(),
+            0xFF60A5FA.toInt(),
+            0xFFA855F7.toInt(),
+            0xFFE879F9.toInt()
+        ) + paletteColors).distinct()
+    }
+
+    val activeColor = if (editingAccent) config.accentColor else config.textColor
+    val onPickColor: (Int) -> Unit = { argb ->
+        if (editingAccent) onSelectAccentColor(argb) else onSelectTextColor(argb)
+    }
+
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text("Tipografía", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
         Spacer(modifier = Modifier.height(4.dp))
@@ -1121,7 +1159,18 @@ private fun TextoYColorControls(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OffsetChip(text = "Color letra", highlight = !editingAccent) { editingAccent = false }
+            OffsetChip(text = "Color brillo/acento", highlight = editingAccent) { editingAccent = true }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         Row(
             modifier = Modifier
@@ -1130,9 +1179,8 @@ private fun TextoYColorControls(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Color:", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
-            paletteColors.forEach { argb ->
-                val selected = config.textColor == argb
+            colorChoices.forEach { argb ->
+                val selected = activeColor == argb
                 Box(
                     modifier = Modifier
                         .size(28.dp)
@@ -1143,15 +1191,62 @@ private fun TextoYColorControls(
                             color = if (selected) VersoAccent else Color.White.copy(alpha = 0.25f),
                             shape = CircleShape
                         )
-                        .clickable {
-                            onSelectTextColor(argb)
-                            if (argb != 0xFFFFFFFF.toInt()) onSelectAccentColor(argb)
-                        }
+                        .clickable { onPickColor(argb) }
                 )
             }
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        HueColorBar(
+            selectedColor = activeColor,
+            onColorSelected = onPickColor
+        )
+
         Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Tamaño", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+            Spacer(modifier = Modifier.width(8.dp))
+            Slider(
+                value = config.lyricScale,
+                onValueChange = onScaleChange,
+                valueRange = 0.6f..1.8f,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            LyricAlignment.entries.forEach { align ->
+                OffsetChip(
+                    text = align.label.take(3),
+                    highlight = config.textAlignment == align
+                ) { onSelectAlignment(align) }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Filtro:", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+            PhotoFilter.entries.forEach { filter ->
+                FilterChip(
+                    selected = config.photoFilter == filter,
+                    onClick = { onSelectPhotoFilter(filter) },
+                    label = { Text(filter.label, fontSize = 11.sp) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1165,6 +1260,60 @@ private fun TextoYColorControls(
                 valueRange = 0f..0.85f,
                 modifier = Modifier.weight(1f)
             )
+        }
+    }
+}
+
+@Composable
+private fun HueColorBar(
+    selectedColor: Int,
+    onColorSelected: (Int) -> Unit
+) {
+    val hueColors = remember {
+        listOf(
+            Color(0xFFFF0000),
+            Color(0xFFFFFF00),
+            Color(0xFF00FF00),
+            Color(0xFF00FFFF),
+            Color(0xFF0000FF),
+            Color(0xFFFF00FF),
+            Color(0xFFFF0000)
+        )
+    }
+
+    val hsv = remember(selectedColor) {
+        FloatArray(3).also { android.graphics.Color.colorToHSV(selectedColor, it) }
+    }
+    val thumbFrac = (hsv[0] / 360f).coerceIn(0f, 1f)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(22.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(Brush.horizontalGradient(hueColors))
+            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(11.dp))
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    val frac = (offset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val argb = android.graphics.Color.HSVToColor(floatArrayOf(frac * 360f, 0.85f, 1f))
+                    onColorSelected(argb)
+                }
+            }
+            .pointerInput(Unit) {
+                detectDragGestures { change, _ ->
+                    change.consume()
+                    val frac = (change.position.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val argb = android.graphics.Color.HSVToColor(floatArrayOf(frac * 360f, 0.85f, 1f))
+                    onColorSelected(argb)
+                }
+            }
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cx = thumbFrac * size.width
+            val cy = size.height / 2f
+            drawCircle(color = Color.White, radius = size.height * 0.44f, center = androidx.compose.ui.geometry.Offset(cx, cy))
+            drawCircle(color = Color(selectedColor), radius = size.height * 0.30f, center = androidx.compose.ui.geometry.Offset(cx, cy))
         }
     }
 }

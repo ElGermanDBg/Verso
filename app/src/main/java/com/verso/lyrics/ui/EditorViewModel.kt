@@ -1,6 +1,7 @@
 package com.verso.lyrics.ui
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
@@ -21,6 +22,7 @@ import com.verso.lyrics.model.BrushStyle
 import com.verso.lyrics.model.DrawingPoint
 import com.verso.lyrics.model.DrawingStroke
 import com.verso.lyrics.model.LocalTrack
+import com.verso.lyrics.model.LyricAlignment
 import com.verso.lyrics.model.LyricAnimation
 import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
@@ -29,6 +31,7 @@ import com.verso.lyrics.model.LyricStyle
 import com.verso.lyrics.model.LyricsCandidate
 import com.verso.lyrics.model.LyricsFetchResult
 import com.verso.lyrics.model.LyricsState
+import com.verso.lyrics.model.PhotoFilter
 import com.verso.lyrics.model.StoryConfig
 import com.verso.lyrics.update.AppUpdateManager
 import com.verso.lyrics.update.GithubReleaseInfo
@@ -76,6 +79,7 @@ data class BrushConfig(
 class EditorViewModel(application: Application) : AndroidViewModel(application) {
 
     private val appContext = application.applicationContext
+    private val prefs = appContext.getSharedPreferences("verso_prefs", Context.MODE_PRIVATE)
     private val audioRepo = DeviceAudioRepository(appContext)
     private val lyricsRepo = LyricsRepository(appContext)
     private val videoExporter = VideoExporter(appContext)
@@ -84,7 +88,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         repeatMode = Player.REPEAT_MODE_ONE
     }
 
-    private val _config = MutableStateFlow(StoryConfig())
+    private val _config = MutableStateFlow(loadSavedConfig())
     val config: StateFlow<StoryConfig> = _config.asStateFlow()
 
     private val _lyricsState = MutableStateFlow<LyricsState>(LyricsState.Idle)
@@ -289,10 +293,52 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         if (track != null) lyricsRepo.setTrackOffset(track, 0)
     }
 
-    fun setStyle(style: LyricStyle) = _config.update { it.copy(style = style) }
-    fun setAnimation(animation: LyricAnimation) = _config.update { it.copy(animation = animation) }
-    fun setEffect(effect: LyricEffect) = _config.update { it.copy(effect = effect) }
-    fun setFont(font: LyricFont) = _config.update { it.copy(font = font) }
+    fun setStyle(style: LyricStyle) {
+        _config.update { it.copy(style = style) }
+        prefs.edit().putString("style", style.name).apply()
+    }
+
+    fun setAnimation(animation: LyricAnimation) {
+        _config.update { it.copy(animation = animation) }
+        prefs.edit().putString("animation", animation.name).apply()
+    }
+
+    fun setEffect(effect: LyricEffect) {
+        _config.update { it.copy(effect = effect) }
+        prefs.edit().putString("effect", effect.name).apply()
+    }
+
+    fun setFont(font: LyricFont) {
+        _config.update { it.copy(font = font) }
+        prefs.edit().putString("font", font.name).apply()
+    }
+
+    fun setPhotoFilter(filter: PhotoFilter) {
+        _config.update { it.copy(photoFilter = filter) }
+        prefs.edit().putString("photoFilter", filter.name).apply()
+    }
+
+    fun setTextAlignment(alignment: LyricAlignment) {
+        _config.update { it.copy(textAlignment = alignment) }
+        prefs.edit().putString("textAlignment", alignment.name).apply()
+    }
+
+    fun setLyricScale(scale: Float) {
+        _config.update { it.copy(lyricScale = scale.coerceIn(0.6f, 1.8f)) }
+    }
+
+    private fun loadSavedConfig(): StoryConfig = StoryConfig(
+        style = enumOrDefault(prefs.getString("style", null), LyricStyle.SCROLL),
+        animation = enumOrDefault(prefs.getString("animation", null), LyricAnimation.FADE_UP),
+        effect = enumOrDefault(prefs.getString("effect", null), LyricEffect.NONE),
+        font = enumOrDefault(prefs.getString("font", null), LyricFont.MODERNA),
+        photoFilter = enumOrDefault(prefs.getString("photoFilter", null), PhotoFilter.NONE),
+        textAlignment = enumOrDefault(prefs.getString("textAlignment", null), LyricAlignment.CENTER),
+        showSongBadge = prefs.getBoolean("showSongBadge", true)
+    )
+
+    private inline fun <reified T : Enum<T>> enumOrDefault(raw: String?, fallback: T): T =
+        raw?.let { name -> runCatching { enumValueOf<T>(name) }.getOrNull() } ?: fallback
 
     fun setBrushStyle(style: BrushStyle) = _brushConfig.update { it.copy(style = style) }
     fun setBrushColor(color: Int) = _brushConfig.update { it.copy(color = color) }

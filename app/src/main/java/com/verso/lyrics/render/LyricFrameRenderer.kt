@@ -4,9 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -19,16 +23,20 @@ import android.text.style.ForegroundColorSpan
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.ColorUtils
 import com.verso.lyrics.model.BrushStyle
+import com.verso.lyrics.model.DrawingPoint
 import com.verso.lyrics.model.DrawingStroke
+import com.verso.lyrics.model.LyricAlignment
 import com.verso.lyrics.model.LyricAnimation
 import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
+import com.verso.lyrics.model.PhotoFilter
 import com.verso.lyrics.model.StoryConfig
 import com.verso.lyrics.model.activeLyricIndex
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
@@ -42,6 +50,9 @@ import kotlin.math.sin
 object LyricFrameRenderer {
 
     private val typefaceCache = ConcurrentHashMap<LyricFont, Typeface>()
+
+    /** Stamp procedural de tiza 96×96 con porosidad orgánica de papel y estrías direccionales. */
+    private val chalkStampBitmap: Bitmap by lazy { createChalkStampBitmap(96) }
 
     private data class AnimatedLineFrame(
         val text: CharSequence,
@@ -66,7 +77,7 @@ object LyricFrameRenderer {
     ) {
         if (width <= 0 || height <= 0) return
 
-        drawBackground(canvas, width, height, photoBitmap, config.backgroundDim)
+        drawBackground(canvas, width, height, photoBitmap, config.backgroundDim, config.photoFilter)
 
         if (config.strokes.isNotEmpty()) {
             drawStrokes(canvas, width, height, config.strokes)
@@ -116,6 +127,62 @@ object LyricFrameRenderer {
         canvas.restore()
     }
 
+    private fun createChalkStampBitmap(size: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(size * size)
+        val half = size / 2f
+
+        for (y in 0 until size) {
+            for (x in 0 until size) {
+                val dx = (x - half) / half
+                val dy = (y - half) / half
+                val dist = hypot(dx, dy)
+                if (dist >= 1.0f) {
+                    pixels[y * size + x] = Color.TRANSPARENT
+                    continue
+                }
+
+                // Ruido multi-octava determinista para simular poros de papel y grano seco de tiza
+                val n1 = valueNoise2D(x * 0.24f, y * 0.24f)
+                val n2 = valueNoise2D(x * 0.55f + 17f, y * 0.55f + 31f)
+                val striation = valueNoise2D(x * 0.14f + 5f, y * 0.85f + 11f)
+                val fineGrain = deterministicHash(x, y, 73)
+
+                // Borde orgánico irregular + caída suave radial
+                val edgeWarp = (n1 - 0.5f) * 0.26f
+                val radial = (1f - (dist + edgeWarp).coerceIn(0f, 1f))
+                val radialFalloff = radial * radial
+
+                val texture = n1 * 0.42f + n2 * 0.28f + striation * 0.18f + fineGrain * 0.12f
+                // Umbral poroso: deja huecos secos reales propios de la tiza
+                val density = ((texture - 0.28f) / 0.55f).coerceIn(0f, 1f)
+                val alpha = (radialFalloff * density * 255f).toInt().coerceIn(0, 255)
+                pixels[y * size + x] = Color.argb(alpha, 255, 255, 255)
+            }
+        }
+        bmp.setPixels(pixels, 0, size, 0, 0, size, size)
+        return bmp
+    }
+
+    private fun valueNoise2D(x: Float, y: Float): Float {
+        val xi = kotlin.math.floor(x.toDouble()).toInt()
+        val yi = kotlin.math.floor(y.toDouble()).toInt()
+        val xf = x - xi
+        val yf = y - yi
+
+        val u = xf * xf * (3f - 2f * xf)
+        val v = yf * yf * (3f - 2f * yf)
+
+        val aa = deterministicHash(xi, yi, 11)
+        val ba = deterministicHash(xi + 1, yi, 11)
+        val ab = deterministicHash(xi, yi + 1, 11)
+        val bb = deterministicHash(xi + 1, yi + 1, 11)
+
+        val x1 = aa + u * (ba - aa)
+        val x2 = ab + u * (bb - ab)
+        return (x1 + v * (x2 - x1)).coerceIn(0f, 1f)
+    }
+
     private fun drawStrokes(
         canvas: Canvas,
         width: Int,
@@ -131,6 +198,7 @@ object LyricFrameRenderer {
                 BrushStyle.CHALK -> drawChalkStroke(canvas, width, height, strokeIdx, stroke, strokePx)
                 BrushStyle.NEON -> drawNeonStroke(canvas, width, height, stroke, strokePx)
                 BrushStyle.MARKER -> drawMarkerStroke(canvas, width, height, stroke, strokePx)
+                BrushStyle.ARROW -> drawArrowStroke(canvas, width, height, stroke, strokePx)
             }
         }
     }
@@ -144,20 +212,14 @@ object LyricFrameRenderer {
         strokePx: Float
     ) {
         val pts = stroke.points
-        val path = buildSmoothPath(pts, width, height)
-        val basePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            strokeWidth = strokePx * 0.72f
-            color = ColorUtils.setAlphaComponent(stroke.color, 95)
+        val stamp = chalkStampBitmap
+        val stampPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = PorterDuffColorFilter(stroke.color, PorterDuff.Mode.SRC_IN)
         }
-        canvas.drawPath(path, basePaint)
 
-        // Dispersión determinista de granos de tiza (sin parpadeo entre frames del MP4)
-        val grainPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        val stepPx = max(2.5f, strokePx * 0.2f)
-        val radius = strokePx * 0.58f
+        val stepPx = max(2.2f, strokePx * 0.14f)
+        val baseRadius = strokePx * 0.62f
+        val dstRect = RectF()
         var stepCounter = 0
 
         for (i in 0 until pts.size) {
@@ -166,6 +228,7 @@ object LyricFrameRenderer {
             val x2 = if (i + 1 < pts.size) pts[i + 1].x * width else x1
             val y2 = if (i + 1 < pts.size) pts[i + 1].y * height else y1
             val dist = hypot(x2 - x1, y2 - y1)
+            val angleDeg = Math.toDegrees(atan2((y2 - y1).toDouble(), (x2 - x1).toDouble())).toFloat()
             val steps = max(1, (dist / stepPx).toInt())
 
             for (s in 0..steps) {
@@ -174,20 +237,19 @@ object LyricFrameRenderer {
                 val cy = y1 + (y2 - y1) * t
                 stepCounter++
 
-                for (g in 0 until 7) {
-                    val h1 = deterministicHash(strokeIdx, stepCounter, g * 3 + 1)
-                    val h2 = deterministicHash(strokeIdx, stepCounter, g * 3 + 2)
-                    val h3 = deterministicHash(strokeIdx, stepCounter, g * 3 + 3)
+                val hScale = deterministicHash(strokeIdx, stepCounter, 1)
+                val hRot = deterministicHash(strokeIdx, stepCounter, 2)
+                val hAlpha = deterministicHash(strokeIdx, stepCounter, 3)
 
-                    val angle = h1 * (Math.PI * 2.0)
-                    val r = (0.15f + 0.85f * h2) * radius
-                    val gx = cx + (cos(angle) * r).toFloat()
-                    val gy = cy + (sin(angle) * r).toFloat()
-                    val grainRadius = strokePx * (0.07f + 0.14f * h3)
-                    val alpha = (85 + (155 * (1f - h2 * 0.6f))).toInt().coerceIn(70, 240)
-                    grainPaint.color = ColorUtils.setAlphaComponent(stroke.color, alpha)
-                    canvas.drawCircle(gx, gy, grainRadius, grainPaint)
-                }
+                val radius = baseRadius * (0.92f + 0.34f * hScale)
+                val rot = angleDeg + (hRot - 0.5f) * 32f
+                stampPaint.alpha = (145 + (80 * hAlpha)).toInt().coerceIn(120, 235)
+
+                dstRect.set(cx - radius, cy - radius, cx + radius, cy + radius)
+                canvas.save()
+                canvas.rotate(rot, cx, cy)
+                canvas.drawBitmap(stamp, null, dstRect, stampPaint)
+                canvas.restore()
             }
         }
     }
@@ -237,7 +299,54 @@ object LyricFrameRenderer {
         canvas.drawPath(path, paint)
     }
 
-    private fun buildSmoothPath(points: List<com.verso.lyrics.model.DrawingPoint>, width: Int, height: Int): Path {
+    private fun drawArrowStroke(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        stroke: DrawingStroke,
+        strokePx: Float
+    ) {
+        val pts = stroke.points
+        val path = buildSmoothPath(pts, width, height)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = strokePx
+            color = ColorUtils.setAlphaComponent(stroke.color, 235)
+        }
+        canvas.drawPath(path, paint)
+
+        if (pts.size >= 2) {
+            val endX = pts.last().x * width
+            val endY = pts.last().y * height
+            var refIdx = (pts.size - 4).coerceAtLeast(0)
+            while (refIdx < pts.size - 1 &&
+                hypot((endX - pts[refIdx].x * width), (endY - pts[refIdx].y * height)) < strokePx * 1.2f
+            ) {
+                refIdx++
+            }
+            val startX = pts[(refIdx - 1).coerceAtLeast(0)].x * width
+            val startY = pts[(refIdx - 1).coerceAtLeast(0)].y * height
+            val angle = atan2((endY - startY).toDouble(), (endX - startX).toDouble())
+            val headLen = max(strokePx * 2.6f, 22f)
+            val wingAngle = Math.toRadians(28.0)
+
+            val leftX = endX - headLen * cos(angle - wingAngle).toFloat()
+            val leftY = endY - headLen * sin(angle - wingAngle).toFloat()
+            val rightX = endX - headLen * cos(angle + wingAngle).toFloat()
+            val rightY = endY - headLen * sin(angle + wingAngle).toFloat()
+
+            val headPath = Path().apply {
+                moveTo(leftX, leftY)
+                lineTo(endX, endY)
+                lineTo(rightX, rightY)
+            }
+            canvas.drawPath(headPath, paint)
+        }
+    }
+
+    private fun buildSmoothPath(points: List<DrawingPoint>, width: Int, height: Int): Path {
         val path = Path()
         if (points.isEmpty()) return path
         val firstX = points[0].x * width
@@ -290,7 +399,8 @@ object LyricFrameRenderer {
         width: Int,
         height: Int,
         photoBitmap: Bitmap?,
-        dim: Float
+        dim: Float,
+        photoFilter: PhotoFilter
     ) {
         if (photoBitmap != null && !photoBitmap.isRecycled) {
             val srcW = photoBitmap.width.toFloat()
@@ -301,7 +411,9 @@ object LyricFrameRenderer {
             val left = (width - scaledW) / 2f
             val top = (height - scaledH) / 2f
             val dstRect = RectF(left, top, left + scaledW, top + scaledH)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                colorFilter = colorFilterFor(photoFilter)
+            }
             canvas.drawBitmap(photoBitmap, null, dstRect, paint)
         } else {
             val bgPaint = Paint().apply {
@@ -334,6 +446,46 @@ object LyricFrameRenderer {
             )
         }
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), vignettePaint)
+    }
+
+    private fun colorFilterFor(filter: PhotoFilter): ColorMatrixColorFilter? {
+        val cm = when (filter) {
+            PhotoFilter.NONE -> return null
+            PhotoFilter.WARM -> ColorMatrix(
+                floatArrayOf(
+                    1.12f, 0f, 0f, 0f, 10f,
+                    0f, 1.02f, 0f, 0f, 2f,
+                    0f, 0f, 0.86f, 0f, -6f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
+            PhotoFilter.COOL -> ColorMatrix(
+                floatArrayOf(
+                    0.88f, 0f, 0f, 0f, -4f,
+                    0f, 1.02f, 0f, 0f, 4f,
+                    0f, 0f, 1.16f, 0f, 12f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
+            PhotoFilter.BW -> ColorMatrix().apply { setSaturation(0f) }
+            PhotoFilter.VINTAGE -> ColorMatrix(
+                floatArrayOf(
+                    0.96f, 0.16f, 0.06f, 0f, 12f,
+                    0.06f, 0.92f, 0.08f, 0f, 8f,
+                    0.02f, 0.08f, 0.74f, 0f, 14f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
+            PhotoFilter.MOODY -> ColorMatrix(
+                floatArrayOf(
+                    0.82f, 0f, 0f, 0f, -12f,
+                    0f, 0.84f, 0f, 0f, -10f,
+                    0f, 0f, 0.96f, 0f, 4f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
+        }
+        return ColorMatrixColorFilter(cm)
     }
 
     private fun drawSongBadge(
@@ -519,9 +671,10 @@ object LyricFrameRenderer {
         posMs: Long,
         alpha: Int
     ) {
+        val alignment = layoutAlignmentFor(config.textAlignment)
         when (config.effect) {
             LyricEffect.NONE -> {
-                buildLayout(text, paint, maxWidth).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
             }
             LyricEffect.OUTLINE -> {
                 val lum = ColorUtils.calculateLuminance(paint.color)
@@ -532,8 +685,8 @@ object LyricFrameRenderer {
                     color = ColorUtils.setAlphaComponent(if (lum > 0.45) Color.BLACK else Color.WHITE, alpha)
                     clearShadowLayer()
                 }
-                buildLayout(text, strokePaint, maxWidth).draw(canvas)
-                buildLayout(text, paint, maxWidth).draw(canvas)
+                buildLayout(text, strokePaint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
             }
             LyricEffect.NEON -> {
                 val outerPaint = TextPaint(paint).apply {
@@ -542,8 +695,8 @@ object LyricFrameRenderer {
                 val innerPaint = TextPaint(paint).apply {
                     setShadowLayer(paint.textSize * 0.18f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, alpha))
                 }
-                buildLayout(text, outerPaint, maxWidth).draw(canvas)
-                buildLayout(text, innerPaint, maxWidth).draw(canvas)
+                buildLayout(text, outerPaint, maxWidth, alignment).draw(canvas)
+                buildLayout(text, innerPaint, maxWidth, alignment).draw(canvas)
             }
             LyricEffect.GLITCH -> {
                 val shift = paint.textSize * 0.055f * sin(posMs / 85.0).toFloat()
@@ -558,15 +711,15 @@ object LyricFrameRenderer {
                 }
                 canvas.save()
                 canvas.translate(-shift, shiftY)
-                buildLayout(text, cyanPaint, maxWidth).draw(canvas)
+                buildLayout(text, cyanPaint, maxWidth, alignment).draw(canvas)
                 canvas.restore()
 
                 canvas.save()
                 canvas.translate(shift, -shiftY)
-                buildLayout(text, magentaPaint, maxWidth).draw(canvas)
+                buildLayout(text, magentaPaint, maxWidth, alignment).draw(canvas)
                 canvas.restore()
 
-                buildLayout(text, paint, maxWidth).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
             }
             LyricEffect.GRADIENT -> {
                 val gradPaint = TextPaint(paint)
@@ -582,7 +735,7 @@ object LyricFrameRenderer {
                         Shader.TileMode.CLAMP
                     )
                 }
-                buildLayout(text, gradPaint, maxWidth).draw(canvas)
+                buildLayout(text, gradPaint, maxWidth, alignment).draw(canvas)
             }
             LyricEffect.SHADOW_3D -> {
                 val depthColor = ColorUtils.blendARGB(config.accentColor, Color.BLACK, 0.35f)
@@ -591,14 +744,14 @@ object LyricFrameRenderer {
                     color = ColorUtils.setAlphaComponent(depthColor, (alpha * 0.85f).toInt())
                     clearShadowLayer()
                 }
-                val layout3d = buildLayout(text, shadowPaint, maxWidth)
+                val layout3d = buildLayout(text, shadowPaint, maxWidth, alignment)
                 for (layer in 5 downTo 1) {
                     canvas.save()
                     canvas.translate(step * layer, step * layer)
                     layout3d.draw(canvas)
                     canvas.restore()
                 }
-                buildLayout(text, paint, maxWidth).draw(canvas)
+                buildLayout(text, paint, maxWidth, alignment).draw(canvas)
             }
         }
     }
@@ -628,6 +781,7 @@ object LyricFrameRenderer {
         val anim = computeAnimation(canvasWidth, config, lines, currentIdx, posMs)
         val prevLine = lines.getOrNull(currentIdx - 1)
         val nextLine = lines.getOrNull(currentIdx + 1)
+        val align = layoutAlignmentFor(config.textAlignment)
 
         val activePaint = createTextPaint(
             color = ColorUtils.setAlphaComponent(config.textColor, anim.alpha),
@@ -644,9 +798,9 @@ object LyricFrameRenderer {
             shadowColor = Color.argb(150, 0, 0, 0)
         )
 
-        val activeLayout = buildLayout(anim.text, activePaint, maxWidth)
-        val prevLayout = prevLine?.let { buildLayout(it.text, sidePaint, maxWidth) }
-        val nextLayout = nextLine?.let { buildLayout(it.text, sidePaint, maxWidth) }
+        val activeLayout = buildLayout(anim.text, activePaint, maxWidth, align)
+        val prevLayout = prevLine?.let { buildLayout(it.text, sidePaint, maxWidth, align) }
+        val nextLayout = nextLine?.let { buildLayout(it.text, sidePaint, maxWidth, align) }
 
         val gap = canvasWidth * 0.034f
         val activeTop = -activeLayout.height / 2f + anim.offsetY
@@ -692,7 +846,7 @@ object LyricFrameRenderer {
             shadowRadius = anim.glowRadius,
             shadowColor = anim.glowColor
         )
-        val layout = buildLayout(anim.text, paint, maxWidth)
+        val layout = buildLayout(anim.text, paint, maxWidth, layoutAlignmentFor(config.textAlignment))
 
         canvas.save()
         canvas.translate(0f, anim.offsetY)
@@ -715,6 +869,7 @@ object LyricFrameRenderer {
         val currentIdx = activeIdx.coerceAtLeast(0)
         val anim = computeAnimation(canvasWidth, config, lines, currentIdx, posMs)
         val nextLine = lines.getOrNull(currentIdx + 1)
+        val align = layoutAlignmentFor(config.textAlignment)
 
         val mainPaint = createTextPaint(
             color = ColorUtils.setAlphaComponent(config.textColor, anim.alpha),
@@ -723,7 +878,7 @@ object LyricFrameRenderer {
             shadowRadius = if (config.animation == LyricAnimation.GLOW_PULSE) anim.glowRadius else 0f,
             shadowColor = anim.glowColor
         )
-        val mainLayout = buildLayout(anim.text, mainPaint, maxTextW)
+        val mainLayout = buildLayout(anim.text, mainPaint, maxTextW, align)
 
         val nextPaint = createTextPaint(
             color = ColorUtils.setAlphaComponent(config.textColor, 160),
@@ -732,7 +887,7 @@ object LyricFrameRenderer {
             shadowRadius = 0f,
             shadowColor = Color.TRANSPARENT
         )
-        val nextLayout = nextLine?.let { buildLayout(it.text, nextPaint, maxTextW) }
+        val nextLayout = nextLine?.let { buildLayout(it.text, nextPaint, maxTextW, align) }
 
         val padH = canvasWidth * 0.06f
         val padV = canvasWidth * 0.048f
@@ -780,34 +935,29 @@ object LyricFrameRenderer {
         val currentIdx = activeIdx.coerceAtLeast(0)
         val anim = computeAnimation(canvasWidth, config, lines, currentIdx, posMs)
 
-        val lum = ColorUtils.calculateLuminance(config.accentColor)
-        val autoTextColor = if (config.animation == LyricAnimation.KARAOKE) {
-            config.textColor
-        } else if (lum > 0.52) {
-            Color.BLACK
-        } else {
-            Color.WHITE
-        }
-
         val paint = createTextPaint(
-            color = ColorUtils.setAlphaComponent(autoTextColor, anim.alpha),
+            color = ColorUtils.setAlphaComponent(config.textColor, anim.alpha),
             textSize = canvasWidth * 0.054f,
             typeface = typeface,
             shadowRadius = 0f,
             shadowColor = Color.TRANSPARENT
         )
-        val layout = buildLayout(anim.text, paint, maxTextW)
+        val layout = buildLayout(anim.text, paint, maxTextW, layoutAlignmentFor(config.textAlignment))
         val padH = canvasWidth * 0.055f
         val padV = canvasWidth * 0.034f
         val boxW = maxTextW + padH * 2f
         val boxH = layout.height + padV * 2f
         val boxRect = RectF(-boxW / 2f, -boxH / 2f, boxW / 2f, boxH / 2f)
+
+        val hasContrast = ColorUtils.calculateContrast(config.textColor, config.accentColor) >= 2.2
+        val baseBoxColor = when {
+            config.animation == LyricAnimation.KARAOKE -> Color.rgb(16, 16, 24)
+            hasContrast -> config.accentColor
+            ColorUtils.calculateLuminance(config.textColor) > 0.45 -> Color.rgb(16, 16, 24)
+            else -> Color.rgb(250, 250, 252)
+        }
         val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (config.animation == LyricAnimation.KARAOKE) {
-                Color.argb(215, 16, 16, 24)
-            } else {
-                ColorUtils.setAlphaComponent(config.accentColor, (anim.alpha * 0.92f).toInt().coerceIn(60, 240))
-            }
+            color = ColorUtils.setAlphaComponent(baseBoxColor, (anim.alpha * 0.92f).toInt().coerceIn(60, 240))
         }
         val radius = canvasWidth * 0.036f
 
@@ -840,7 +990,7 @@ object LyricFrameRenderer {
             shadowRadius = anim.glowRadius,
             shadowColor = anim.glowColor
         )
-        val layout = buildLayout(anim.text, paint, maxWidth)
+        val layout = buildLayout(anim.text, paint, maxWidth, layoutAlignmentFor(config.textAlignment))
 
         canvas.save()
         canvas.translate(0f, anim.offsetY)
@@ -853,7 +1003,11 @@ object LyricFrameRenderer {
         val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = ColorUtils.setAlphaComponent(config.accentColor, anim.alpha)
         }
-        val barLeft = (maxWidth - barW) / 2f
+        val barLeft = when (config.textAlignment) {
+            LyricAlignment.LEFT -> 0f
+            LyricAlignment.CENTER -> (maxWidth - barW) / 2f
+            LyricAlignment.RIGHT -> maxWidth - barW
+        }
         val barTop = layout.height + canvasWidth * 0.024f
         canvas.drawRoundRect(
             RectF(barLeft, barTop, barLeft + barW, barTop + barH),
@@ -880,16 +1034,27 @@ object LyricFrameRenderer {
             shadowColor = Color.argb(170, 0, 0, 0)
         )
         val maxW = (width * 0.78f).toInt().coerceAtLeast(100)
-        val layout = buildLayout("Sin letra sincronizada\nToca Tramo → Cambiar letra", paint, maxW)
+        val layout = buildLayout("Sin letra sincronizada\nToca Tramo → Cambiar letra", paint, maxW, Layout.Alignment.ALIGN_CENTER)
         canvas.save()
         canvas.translate((width - maxW) / 2f, height * config.lyricPosY - layout.height / 2f)
         layout.draw(canvas)
         canvas.restore()
     }
 
-    private fun buildLayout(text: CharSequence, paint: TextPaint, maxWidth: Int): StaticLayout =
+    private fun layoutAlignmentFor(alignment: LyricAlignment): Layout.Alignment = when (alignment) {
+        LyricAlignment.LEFT -> Layout.Alignment.ALIGN_NORMAL
+        LyricAlignment.CENTER -> Layout.Alignment.ALIGN_CENTER
+        LyricAlignment.RIGHT -> Layout.Alignment.ALIGN_OPPOSITE
+    }
+
+    private fun buildLayout(
+        text: CharSequence,
+        paint: TextPaint,
+        maxWidth: Int,
+        alignment: Layout.Alignment = Layout.Alignment.ALIGN_CENTER
+    ): StaticLayout =
         StaticLayout.Builder.obtain(text, 0, text.length, paint, maxWidth)
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
+            .setAlignment(alignment)
             .setLineSpacing(0f, 1.15f)
             .setIncludePad(false)
             .build()

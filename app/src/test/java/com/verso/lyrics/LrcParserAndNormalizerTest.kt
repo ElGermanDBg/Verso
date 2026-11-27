@@ -2,12 +2,14 @@ package com.verso.lyrics
 
 import com.verso.lyrics.model.BrushStyle
 import com.verso.lyrics.model.LrcParser
+import com.verso.lyrics.model.LyricAlignment
 import com.verso.lyrics.model.LyricAnimation
 import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
 import com.verso.lyrics.model.LyricsNormalizer
+import com.verso.lyrics.model.PhotoFilter
 import com.verso.lyrics.model.activeLyricIndex
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -59,6 +61,8 @@ class LrcParserAndNormalizerTest {
         assertEquals(5, LyricStyle.entries.size)
         assertEquals(6, LyricAnimation.entries.size)
         assertEquals(6, LyricEffect.entries.size)
-        assertEquals(3, BrushStyle.entries.size)
+        assertEquals(4, BrushStyle.entries.size)
+        assertEquals(6, PhotoFilter.entries.size)
+        assertEquals(3, LyricAlignment.entries.size)
     }
 }

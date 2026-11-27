@@ -33,11 +33,29 @@ enum class LyricEffect(val label: String) {
     SHADOW_3D("3D")
 }
 
+/** Filtros de color aplicados a la foto de fondo. */
+enum class PhotoFilter(val label: String) {
+    NONE("Original"),
+    WARM("Cálido"),
+    COOL("Frío"),
+    BW("B&N"),
+    VINTAGE("Vintage"),
+    MOODY("Nocturno")
+}
+
+/** Alineación horizontal del bloque de letras. */
+enum class LyricAlignment(val label: String) {
+    LEFT("Izquierda"),
+    CENTER("Centro"),
+    RIGHT("Derecha")
+}
+
 /** Pinceles de dibujo libre sobre la foto. */
 enum class BrushStyle(val label: String) {
     CHALK("Tiza"),
     NEON("Neón"),
-    MARKER("Marcador")
+    MARKER("Marcador"),
+    ARROW("Flecha")
 }
 
 /** Punto normalizado (0..1) dentro del lienzo 9:16. */
@@ -72,6 +90,8 @@ data class StoryConfig(
     val animation: LyricAnimation = LyricAnimation.FADE_UP,
     val effect: LyricEffect = LyricEffect.NONE,
     val font: LyricFont = LyricFont.MODERNA,
+    val photoFilter: PhotoFilter = PhotoFilter.NONE,
+    val textAlignment: LyricAlignment = LyricAlignment.CENTER,
     val textColor: Int = 0xFFFFFFFF.toInt(),
     val accentColor: Int = 0xFFFF5C8A.toInt(),
     val backgroundDim: Float = 0.35f,
