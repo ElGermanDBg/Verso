@@ -104,5 +104,6 @@ data class StoryConfig(
     val lyricScale: Float = 1.0f,
     val lyricRotationDeg: Float = 0f,
     val lyricsBehindSubject: Boolean = false,
+    val beatPulseEnabled: Boolean = false,
     val strokes: List<DrawingStroke> = emptyList()
 )

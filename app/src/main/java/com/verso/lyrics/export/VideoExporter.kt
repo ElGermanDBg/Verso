@@ -16,6 +16,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.view.Surface
 import androidx.core.content.FileProvider
+import com.verso.lyrics.audio.AudioBeatAnalyzer
+import com.verso.lyrics.audio.BeatEnvelope
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.StoryConfig
 import com.verso.lyrics.render.LyricFrameRenderer
@@ -43,9 +45,17 @@ class VideoExporter(private val context: Context) {
         config: StoryConfig,
         lines: List<LyricLine>,
         foregroundBitmap: Bitmap? = null,
+        beatEnvelope: BeatEnvelope? = null,
         onProgress: (Float) -> Unit
     ): ExportResult = withContext(Dispatchers.Default) {
         val track = config.track ?: error("Selecciona una canción primero")
+        val clipStartMs = config.clipStartMs.coerceAtLeast(0L)
+        val clipDurationMs = config.clipDurationMs.coerceIn(3_000L, 60_000L)
+        val resolvedBeatEnvelope = if (config.beatPulseEnabled) {
+            beatEnvelope ?: AudioBeatAnalyzer.analyzeClip(context, track.contentUri, clipStartMs, clipDurationMs)
+        } else {
+            null
+        }
         val photoBitmap = config.photoUri?.let { loadBitmap(it, 1080, 1920) }
         val albumArtBitmap = loadBitmap(track.albumArtUri, 256, 256)
         var createdLocalForeground = false
@@ -61,9 +71,6 @@ class VideoExporter(private val context: Context) {
 
         val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
         val outFile = File(exportsDir, "verso_${System.currentTimeMillis()}.mp4")
-
-        val clipStartMs = config.clipStartMs.coerceAtLeast(0L)
-        val clipDurationMs = config.clipDurationMs.coerceIn(3_000L, 60_000L)
 
         var muxer: MediaMuxer? = null
         var muxerStarted = false
@@ -158,6 +165,7 @@ class VideoExporter(private val context: Context) {
                         inputSurface.lockCanvas(null)
                     }
                     try {
+                        val pulse = resolvedBeatEnvelope?.pulseAt(trackPosMs) ?: 0f
                         LyricFrameRenderer.drawFrame(
                             context = context,
                             canvas = canvas,
@@ -169,7 +177,8 @@ class VideoExporter(private val context: Context) {
                             photoBitmap = photoBitmap,
                             albumArtBitmap = albumArtBitmap,
                             foregroundBitmap = resolvedForeground,
-                            showCenterGuides = false
+                            showCenterGuides = false,
+                            beatPulse = pulse
                         )
                     } finally {
                         inputSurface.unlockCanvasAndPost(canvas)

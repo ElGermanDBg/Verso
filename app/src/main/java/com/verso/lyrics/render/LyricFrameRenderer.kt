@@ -76,7 +76,8 @@ object LyricFrameRenderer {
         foregroundBitmap: Bitmap? = null,
         maskOverlayBitmap: Bitmap? = null,
         showMaskOverlay: Boolean = false,
-        showCenterGuides: Boolean = false
+        showCenterGuides: Boolean = false,
+        beatPulse: Float = 0f
     ) {
         if (width <= 0 || height <= 0) return
 
@@ -106,7 +107,8 @@ object LyricFrameRenderer {
                 activeIdx = activeIdx,
                 posMs = effectivePosMs,
                 typeface = typeface,
-                outlinePassOnly = false
+                outlinePassOnly = false,
+                beatPulse = beatPulse
             )
         }
 
@@ -136,7 +138,8 @@ object LyricFrameRenderer {
                     activeIdx = activeIdx,
                     posMs = effectivePosMs,
                     typeface = typeface,
-                    outlinePassOnly = true
+                    outlinePassOnly = true,
+                    beatPulse = beatPulse
                 )
             }
         }
@@ -728,12 +731,15 @@ object LyricFrameRenderer {
         activeIdx: Int,
         posMs: Long,
         typeface: Typeface,
-        outlinePassOnly: Boolean
+        outlinePassOnly: Boolean,
+        beatPulse: Float = 0f
     ) {
+        val pulseFactor = if (config.beatPulseEnabled) beatPulse.coerceIn(0f, 1f) else 0f
+        val effectiveScale = config.lyricScale * (1f + pulseFactor * 0.14f)
         canvas.save()
         canvas.translate(width * config.lyricPosX, height * config.lyricPosY)
         canvas.rotate(config.lyricRotationDeg)
-        canvas.scale(config.lyricScale, config.lyricScale)
+        canvas.scale(effectiveScale, effectiveScale)
 
         when (config.style) {
             LyricStyle.SCROLL -> drawScrollStyle(canvas, width, config, lines, activeIdx, posMs, typeface, outlinePassOnly)

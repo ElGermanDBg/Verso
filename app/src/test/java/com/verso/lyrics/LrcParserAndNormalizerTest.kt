@@ -1,5 +1,7 @@
 package com.verso.lyrics
 
+import com.verso.lyrics.audio.AudioBeatAnalyzer
+import com.verso.lyrics.audio.BeatEnvelope
 import com.verso.lyrics.model.BrushStyle
 import com.verso.lyrics.model.LrcParser
 import com.verso.lyrics.model.LyricAlignment
@@ -64,5 +66,37 @@ class LrcParserAndNormalizerTest {
         assertEquals(4, BrushStyle.entries.size)
         assertEquals(6, PhotoFilter.entries.size)
         assertEquals(3, LyricAlignment.entries.size)
+    }
+
+    @Test
+    fun beatEnvelopeInterpolatesAndClampsCorrectly() {
+        val env = BeatEnvelope(
+            startMs = 1_000L,
+            frameStepMs = 100L,
+            levels = floatArrayOf(0.0f, 1.0f, 0.4f)
+        )
+        assertEquals(0.0f, env.pulseAt(500L), 0.001f)
+        assertEquals(0.0f, env.pulseAt(1_000L), 0.001f)
+        assertEquals(0.5f, env.pulseAt(1_050L), 0.001f)
+        assertEquals(1.0f, env.pulseAt(1_100L), 0.001f)
+        assertEquals(0.7f, env.pulseAt(1_150L), 0.001f)
+        assertEquals(0.4f, env.pulseAt(1_500L), 0.001f)
+
+        val empty = BeatEnvelope(startMs = 0L, frameStepMs = 33L, levels = FloatArray(0))
+        assertEquals(0.0f, empty.pulseAt(100L), 0.001f)
+    }
+
+    @Test
+    fun computeBeatLevelsDetectsPeakAndDecaysSmoothly() {
+        val rms = FloatArray(30) { 0.05f }
+        rms[12] = 0.85f // golpe de grave fuerte
+        val levels = AudioBeatAnalyzer.computeBeatLevels(rms)
+        assertEquals(30, levels.size)
+        assertEquals(1.0f, levels[12], 0.05f)
+        // Decaimiento suave inmediatamente después del golpe
+        assert(levels[13] > levels[14] && levels[14] > 0.3f)
+        // Silencio produce ceros
+        val silent = AudioBeatAnalyzer.computeBeatLevels(FloatArray(10) { 0f })
+        assertEquals(0.0f, silent.max(), 0.001f)
     }
 }

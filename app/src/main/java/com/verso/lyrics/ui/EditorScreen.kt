@@ -53,6 +53,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.MovieCreation
 import androidx.compose.material.icons.rounded.MusicNote
@@ -156,6 +157,8 @@ fun EditorScreen(viewModel: EditorViewModel) {
     val maskBrushRadiusNorm by viewModel.maskBrushRadiusNorm.collectAsStateWithLifecycle()
     val isSegmentingSubject by viewModel.isSegmentingSubject.collectAsStateWithLifecycle()
     val segmentationError by viewModel.segmentationError.collectAsStateWithLifecycle()
+    val beatEnvelope by viewModel.beatEnvelope.collectAsStateWithLifecycle()
+    val isAnalyzingBeat by viewModel.isAnalyzingBeat.collectAsStateWithLifecycle()
 
     val audioPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_AUDIO
@@ -451,6 +454,11 @@ fun EditorScreen(viewModel: EditorViewModel) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     // Leer maskVersion asegura redibujo inmediato mientras se pinta la silueta
                     val currentMaskVer = maskVersion
+                    val currentBeatPulse = if (renderConfig.beatPulseEnabled) {
+                        beatEnvelope?.pulseAt(currentPositionMs) ?: 0f
+                    } else {
+                        0f
+                    }
                     drawIntoCanvas { canvas ->
                         LyricFrameRenderer.drawFrame(
                             context = context,
@@ -465,7 +473,8 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             foregroundBitmap = if (currentMaskVer >= 0) foregroundBitmap else null,
                             maskOverlayBitmap = subjectMaskBitmap,
                             showMaskOverlay = isMaskEditMode,
-                            showCenterGuides = isDraggingLyric && !isDrawingMode && !isMaskEditMode
+                            showCenterGuides = isDraggingLyric && !isDrawingMode && !isMaskEditMode,
+                            beatPulse = currentBeatPulse
                         )
                     }
                 }
@@ -698,10 +707,12 @@ fun EditorScreen(viewModel: EditorViewModel) {
                                     hasPhoto = photoBitmap != null,
                                     isSegmenting = isSegmentingSubject,
                                     segmentationError = segmentationError,
+                                    isAnalyzingBeat = isAnalyzingBeat,
                                     onSelectStyle = viewModel::setStyle,
                                     onSelectAnimation = viewModel::setAnimation,
                                     onSelectEffect = viewModel::setEffect,
                                     onToggleBehindSubject = viewModel::toggleLyricsBehindSubject,
+                                    onToggleBeatPulse = viewModel::toggleBeatPulse,
                                     onOpenManualMaskEdit = {
                                         viewModel.ensureMaskReadyForManualEdit()
                                         isMaskEditMode = true
@@ -1156,10 +1167,12 @@ private fun EstiloYAnimacionControls(
     hasPhoto: Boolean,
     isSegmenting: Boolean,
     segmentationError: String?,
+    isAnalyzingBeat: Boolean,
     onSelectStyle: (LyricStyle) -> Unit,
     onSelectAnimation: (LyricAnimation) -> Unit,
     onSelectEffect: (LyricEffect) -> Unit,
     onToggleBehindSubject: () -> Unit,
+    onToggleBeatPulse: () -> Unit,
     onOpenManualMaskEdit: () -> Unit,
     onToggleBadge: () -> Unit
 ) {
@@ -1237,6 +1250,68 @@ private fun EstiloYAnimacionControls(
                 Icon(Icons.Rounded.Brush, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Ajustar contorno manualmente", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Interruptor de latido al ritmo del audio
+        val hasTrack = config.track != null
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    if (config.beatPulseEnabled) VersoAccent.copy(alpha = 0.16f) else VersoSurfaceElevated
+                )
+                .border(
+                    width = 1.dp,
+                    color = if (config.beatPulseEnabled) VersoAccent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.06f),
+                    shape = RoundedCornerShape(14.dp)
+                )
+                .clickable(enabled = !isAnalyzingBeat) { onToggleBeatPulse() }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.GraphicEq,
+                    contentDescription = null,
+                    tint = if (config.beatPulseEnabled) VersoAccent else Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "Latido al ritmo",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    val beatSubtitle = when {
+                        isAnalyzingBeat -> "Analizando ritmo del tramo…"
+                        !hasTrack -> "Elige una canción primero"
+                        config.beatPulseEnabled -> "Palpita con los graves de la canción"
+                        else -> "Sincroniza el pulso con la música"
+                    }
+                    Text(
+                        text = beatSubtitle,
+                        fontSize = 11.sp,
+                        color = VersoTextSecondary
+                    )
+                }
+            }
+            if (isAnalyzingBeat) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = VersoAccent)
+            } else {
+                Switch(
+                    checked = config.beatPulseEnabled,
+                    onCheckedChange = { onToggleBeatPulse() }
+                )
             }
         }
 

@@ -14,6 +14,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.palette.graphics.Palette
 import com.verso.lyrics.BuildConfig
+import com.verso.lyrics.audio.AudioBeatAnalyzer
+import com.verso.lyrics.audio.BeatEnvelope
 import com.verso.lyrics.data.DeviceAudioRepository
 import com.verso.lyrics.data.LyricsRepository
 import com.verso.lyrics.export.ExportResult
@@ -160,9 +162,16 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _segmentationError = MutableStateFlow<String?>(null)
     val segmentationError: StateFlow<String?> = _segmentationError.asStateFlow()
 
+    private val _beatEnvelope = MutableStateFlow<BeatEnvelope?>(null)
+    val beatEnvelope: StateFlow<BeatEnvelope?> = _beatEnvelope.asStateFlow()
+
+    private val _isAnalyzingBeat = MutableStateFlow(false)
+    val isAnalyzingBeat: StateFlow<Boolean> = _isAnalyzingBeat.asStateFlow()
+
     private var exportJob: Job? = null
     private var updateJob: Job? = null
     private var segmentJob: Job? = null
+    private var beatJob: Job? = null
 
     init {
         checkForUpdates(silent = true)
@@ -349,6 +358,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         _currentPositionMs.value = 0L
+        _beatEnvelope.value = null
         player.setMediaItem(MediaItem.fromUri(track.contentUri))
         player.prepare()
         player.seekTo(0L)
@@ -358,6 +368,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             _albumArtBitmap.value = withContext(Dispatchers.IO) { decodeBitmap(track.albumArtUri, 256, 256) }
         }
         fetchLyricsForTrack(track, forceOnline = false)
+        if (_config.value.beatPulseEnabled) {
+            analyzeBeatForCurrentClip(debounceMs = 0L)
+        }
     }
 
     fun fetchLyricsForTrack(track: LocalTrack, forceOnline: Boolean = false) {
@@ -394,6 +407,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _config.update { it.copy(clipStartMs = clamped) }
         player.seekTo(clamped)
         _currentPositionMs.value = clamped
+        if (_config.value.beatPulseEnabled) {
+            analyzeBeatForCurrentClip(debounceMs = 250L)
+        }
     }
 
     fun nudgeClipStart(deltaMs: Long) {
@@ -413,6 +429,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 clipDurationMs = clampedDur,
                 clipStartMs = it.clipStartMs.coerceIn(0L, maxStart)
             )
+        }
+        if (_config.value.beatPulseEnabled) {
+            analyzeBeatForCurrentClip(debounceMs = 250L)
         }
     }
 
@@ -463,6 +482,33 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _config.update { it.copy(lyricScale = scale.coerceIn(0.6f, 1.8f)) }
     }
 
+    fun toggleBeatPulse() {
+        val next = !_config.value.beatPulseEnabled
+        _config.update { it.copy(beatPulseEnabled = next) }
+        prefs.edit().putBoolean("beatPulseEnabled", next).apply()
+        if (next) {
+            analyzeBeatForCurrentClip(debounceMs = 0L)
+        } else {
+            beatJob?.cancel()
+            _isAnalyzingBeat.value = false
+        }
+    }
+
+    private fun analyzeBeatForCurrentClip(debounceMs: Long = 250L) {
+        val cfg = _config.value
+        val track = cfg.track ?: return
+        val startMs = cfg.clipStartMs.coerceAtLeast(0L)
+        val durationMs = cfg.clipDurationMs.coerceIn(3_000L, 60_000L)
+        beatJob?.cancel()
+        beatJob = viewModelScope.launch {
+            if (debounceMs > 0L) delay(debounceMs)
+            _isAnalyzingBeat.value = true
+            val envelope = AudioBeatAnalyzer.analyzeClip(getApplication(), track.contentUri, startMs, durationMs)
+            _beatEnvelope.value = envelope
+            _isAnalyzingBeat.value = false
+        }
+    }
+
     private fun loadSavedConfig(): StoryConfig = StoryConfig(
         style = enumOrDefault(prefs.getString("style", null), LyricStyle.SCROLL),
         animation = enumOrDefault(prefs.getString("animation", null), LyricAnimation.FADE_UP),
@@ -470,7 +516,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         font = enumOrDefault(prefs.getString("font", null), LyricFont.MODERNA),
         photoFilter = enumOrDefault(prefs.getString("photoFilter", null), PhotoFilter.NONE),
         textAlignment = enumOrDefault(prefs.getString("textAlignment", null), LyricAlignment.CENTER),
-        showSongBadge = prefs.getBoolean("showSongBadge", true)
+        showSongBadge = prefs.getBoolean("showSongBadge", true),
+        beatPulseEnabled = prefs.getBoolean("beatPulseEnabled", false)
     )
 
     private inline fun <reified T : Enum<T>> enumOrDefault(raw: String?, fallback: T): T =
@@ -596,7 +643,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         exportJob = viewModelScope.launch {
             _exportState.value = ExportUiState.Exporting(0f)
             runCatching {
-                videoExporter.exportStory(cfg, lines, _foregroundBitmap.value) { p ->
+                videoExporter.exportStory(cfg, lines, _foregroundBitmap.value, _beatEnvelope.value) { p ->
                     _exportState.value = ExportUiState.Exporting(p)
                 }
             }.onSuccess { result ->
