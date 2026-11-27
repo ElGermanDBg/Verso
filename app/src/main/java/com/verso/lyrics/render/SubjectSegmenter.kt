@@ -104,15 +104,21 @@ object SubjectSegmenter {
         }
 
         // Paso 2: Suavizado guiado por color de la foto (Joint Bilateral 3x3 rápido)
-        val rawSmallPhoto = Bitmap.createScaledBitmap(sourceBitmap, maskWidth, maskHeight, true)
-        val smallPhoto = if (rawSmallPhoto.config == Bitmap.Config.ARGB_8888) {
-            rawSmallPhoto
+        val needsScale = sourceBitmap.width != maskWidth || sourceBitmap.height != maskHeight
+        val scaledPhoto = if (needsScale) {
+            Bitmap.createScaledBitmap(sourceBitmap, maskWidth, maskHeight, true)
         } else {
-            rawSmallPhoto.copy(Bitmap.Config.ARGB_8888, false).also { rawSmallPhoto.recycle() }
+            sourceBitmap
+        }
+        val readablePhoto = if (scaledPhoto.config == Bitmap.Config.ARGB_8888) {
+            scaledPhoto
+        } else {
+            scaledPhoto.copy(Bitmap.Config.ARGB_8888, false)
         }
         val photoPixels = IntArray(total)
-        smallPhoto.getPixels(photoPixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
-        smallPhoto.recycle()
+        readablePhoto.getPixels(photoPixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
+        if (readablePhoto !== scaledPhoto && readablePhoto !== sourceBitmap) readablePhoto.recycle()
+        if (scaledPhoto !== sourceBitmap) scaledPhoto.recycle()
 
         val refined = FloatArray(total)
         val sigmaColorSq = 28f * 28f * 3f
@@ -162,14 +168,19 @@ object SubjectSegmenter {
         val rawMaskBitmap = Bitmap.createBitmap(maskWidth, maskHeight, Bitmap.Config.ARGB_8888)
         rawMaskBitmap.setPixels(maskPixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
 
-        val fullMaskBitmap = Bitmap.createBitmap(sourceBitmap.width, sourceBitmap.height, Bitmap.Config.ARGB_8888)
-        Canvas(fullMaskBitmap).drawBitmap(
-            rawMaskBitmap,
-            null,
-            android.graphics.Rect(0, 0, sourceBitmap.width, sourceBitmap.height),
-            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        )
-        rawMaskBitmap.recycle()
+        val fullMaskBitmap = if (maskWidth == sourceBitmap.width && maskHeight == sourceBitmap.height) {
+            rawMaskBitmap
+        } else {
+            val scaled = Bitmap.createBitmap(sourceBitmap.width, sourceBitmap.height, Bitmap.Config.ARGB_8888)
+            Canvas(scaled).drawBitmap(
+                rawMaskBitmap,
+                null,
+                android.graphics.Rect(0, 0, sourceBitmap.width, sourceBitmap.height),
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            )
+            rawMaskBitmap.recycle()
+            scaled
+        }
 
         val foreground = applyMask(sourceBitmap, fullMaskBitmap)
         SubjectMaskResult(maskBitmap = fullMaskBitmap, foregroundBitmap = foreground)
