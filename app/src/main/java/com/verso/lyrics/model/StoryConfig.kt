@@ -10,7 +10,8 @@ enum class LyricStyle(val label: String) {
     FOCUS("Enfoque"),
     CARD("Tarjeta"),
     HIGHLIGHT("Etiqueta"),
-    CINEMA("Cine")
+    CINEMA("Cine"),
+    STACK("Apilado")
 }
 
 /** Animaciones de entrada y ritmo para el verso activo. */

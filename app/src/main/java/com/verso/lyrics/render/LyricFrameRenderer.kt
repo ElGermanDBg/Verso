@@ -110,6 +110,7 @@ object LyricFrameRenderer {
                 LyricStyle.CARD -> drawCardStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
                 LyricStyle.HIGHLIGHT -> drawHighlightStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
                 LyricStyle.CINEMA -> drawCinemaStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
+                LyricStyle.STACK -> drawStackStyle(canvas, width, config, lines, activeIdx, effectivePosMs, typeface)
             }
 
             canvas.restore()
@@ -1060,6 +1061,87 @@ object LyricFrameRenderer {
             barH / 2f,
             barPaint
         )
+        canvas.restore()
+    }
+
+    /**
+     * Estilo Apilado tipo Instagram Stories: los versos se acumulan uno encima de otro
+     * y se empujan suavemente hacia arriba conforme avanza la canción.
+     */
+    private fun drawStackStyle(
+        canvas: Canvas,
+        canvasWidth: Int,
+        config: StoryConfig,
+        lines: List<LyricLine>,
+        activeIdx: Int,
+        posMs: Long,
+        typeface: Typeface
+    ) {
+        val maxWidth = (canvasWidth * 0.84f).toInt().coerceAtLeast(100)
+        val currentIdx = activeIdx.coerceAtLeast(0)
+        val currentLine = lines[currentIdx]
+        val align = layoutAlignmentFor(config.textAlignment)
+
+        val elapsed = (posMs - currentLine.timeMs).coerceAtLeast(0L)
+        val pushProgress = easeOutCubic((elapsed / 320f).coerceIn(0f, 1f))
+        val anim = computeAnimation(canvasWidth, config, lines, currentIdx, posMs)
+
+        val activePaint = createTextPaint(
+            color = ColorUtils.setAlphaComponent(config.textColor, anim.alpha),
+            textSize = canvasWidth * 0.058f,
+            typeface = typeface,
+            shadowRadius = anim.glowRadius,
+            shadowColor = anim.glowColor
+        )
+        val activeLayout = buildLayout(anim.text, activePaint, maxWidth, align)
+        val gap = canvasWidth * 0.026f
+
+        // Base de la pila (verso activo)
+        val baseTop = -activeLayout.height / 2f
+        val slidePush = (1f - pushProgress) * (activeLayout.height + gap)
+
+        var cursorTop = baseTop + slidePush - gap
+        for (age in 1..3) {
+            val prevIdx = currentIdx - age
+            if (prevIdx < 0) break
+            val prevLine = lines[prevIdx]
+            val (targetScale, targetAlpha) = when (age) {
+                1 -> 0.93f to 205
+                2 -> 0.87f to 140
+                else -> 0.81f to (85f * (1f - pushProgress * 0.5f)).toInt().coerceIn(20, 85)
+            }
+            val prevPaint = createTextPaint(
+                color = ColorUtils.setAlphaComponent(config.textColor, targetAlpha),
+                textSize = canvasWidth * 0.056f,
+                typeface = typeface,
+                shadowRadius = canvasWidth * 0.01f,
+                shadowColor = Color.argb(140, 0, 0, 0)
+            )
+            val prevLayout = buildLayout(prevLine.text, prevPaint, maxWidth, align)
+            val scaledH = prevLayout.height * targetScale
+            cursorTop -= scaledH
+
+            val pivotX = when (config.textAlignment) {
+                LyricAlignment.LEFT -> -maxWidth / 2f
+                LyricAlignment.CENTER -> 0f
+                LyricAlignment.RIGHT -> maxWidth / 2f
+            }
+            canvas.save()
+            canvas.translate(0f, cursorTop)
+            canvas.scale(targetScale, targetScale, pivotX, 0f)
+            canvas.translate(-maxWidth / 2f, 0f)
+            prevLayout.draw(canvas)
+            canvas.restore()
+
+            cursorTop -= gap * 0.9f
+        }
+
+        // Verso activo en la base de la pila
+        canvas.save()
+        canvas.translate(0f, baseTop + anim.offsetY * 0.5f)
+        canvas.scale(anim.scale, anim.scale, 0f, activeLayout.height / 2f)
+        canvas.translate(-maxWidth / 2f, 0f)
+        drawStyledLayout(canvas, anim.text, activePaint, maxWidth, config, posMs, anim.alpha)
         canvas.restore()
     }
 
