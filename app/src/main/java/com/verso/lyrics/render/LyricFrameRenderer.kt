@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -17,7 +18,10 @@ import android.text.TextPaint
 import android.text.style.ForegroundColorSpan
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.ColorUtils
+import com.verso.lyrics.model.BrushStyle
+import com.verso.lyrics.model.DrawingStroke
 import com.verso.lyrics.model.LyricAnimation
+import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
@@ -25,6 +29,8 @@ import com.verso.lyrics.model.StoryConfig
 import com.verso.lyrics.model.activeLyricIndex
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -61,6 +67,10 @@ object LyricFrameRenderer {
         if (width <= 0 || height <= 0) return
 
         drawBackground(canvas, width, height, photoBitmap, config.backgroundDim)
+
+        if (config.strokes.isNotEmpty()) {
+            drawStrokes(canvas, width, height, config.strokes)
+        }
 
         if (showCenterGuides) {
             drawCenterGuides(canvas, width, height, config)
@@ -104,6 +114,158 @@ object LyricFrameRenderer {
         }
 
         canvas.restore()
+    }
+
+    private fun drawStrokes(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        strokes: List<DrawingStroke>
+    ) {
+        strokes.forEachIndexed { strokeIdx, stroke ->
+            val pts = stroke.points
+            if (pts.isEmpty()) return@forEachIndexed
+            val strokePx = (stroke.widthNorm * width).coerceAtLeast(3f)
+
+            when (stroke.style) {
+                BrushStyle.CHALK -> drawChalkStroke(canvas, width, height, strokeIdx, stroke, strokePx)
+                BrushStyle.NEON -> drawNeonStroke(canvas, width, height, stroke, strokePx)
+                BrushStyle.MARKER -> drawMarkerStroke(canvas, width, height, stroke, strokePx)
+            }
+        }
+    }
+
+    private fun drawChalkStroke(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        strokeIdx: Int,
+        stroke: DrawingStroke,
+        strokePx: Float
+    ) {
+        val pts = stroke.points
+        val path = buildSmoothPath(pts, width, height)
+        val basePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = strokePx * 0.72f
+            color = ColorUtils.setAlphaComponent(stroke.color, 95)
+        }
+        canvas.drawPath(path, basePaint)
+
+        // Dispersión determinista de granos de tiza (sin parpadeo entre frames del MP4)
+        val grainPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        val stepPx = max(2.5f, strokePx * 0.2f)
+        val radius = strokePx * 0.58f
+        var stepCounter = 0
+
+        for (i in 0 until pts.size) {
+            val x1 = pts[i].x * width
+            val y1 = pts[i].y * height
+            val x2 = if (i + 1 < pts.size) pts[i + 1].x * width else x1
+            val y2 = if (i + 1 < pts.size) pts[i + 1].y * height else y1
+            val dist = hypot(x2 - x1, y2 - y1)
+            val steps = max(1, (dist / stepPx).toInt())
+
+            for (s in 0..steps) {
+                val t = if (steps == 0) 0f else s.toFloat() / steps
+                val cx = x1 + (x2 - x1) * t
+                val cy = y1 + (y2 - y1) * t
+                stepCounter++
+
+                for (g in 0 until 7) {
+                    val h1 = deterministicHash(strokeIdx, stepCounter, g * 3 + 1)
+                    val h2 = deterministicHash(strokeIdx, stepCounter, g * 3 + 2)
+                    val h3 = deterministicHash(strokeIdx, stepCounter, g * 3 + 3)
+
+                    val angle = h1 * (Math.PI * 2.0)
+                    val r = (0.15f + 0.85f * h2) * radius
+                    val gx = cx + (cos(angle) * r).toFloat()
+                    val gy = cy + (sin(angle) * r).toFloat()
+                    val grainRadius = strokePx * (0.07f + 0.14f * h3)
+                    val alpha = (85 + (155 * (1f - h2 * 0.6f))).toInt().coerceIn(70, 240)
+                    grainPaint.color = ColorUtils.setAlphaComponent(stroke.color, alpha)
+                    canvas.drawCircle(gx, gy, grainRadius, grainPaint)
+                }
+            }
+        }
+    }
+
+    private fun drawNeonStroke(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        stroke: DrawingStroke,
+        strokePx: Float
+    ) {
+        val path = buildSmoothPath(stroke.points, width, height)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        paint.color = ColorUtils.setAlphaComponent(stroke.color, 48)
+        paint.strokeWidth = strokePx * 2.5f
+        canvas.drawPath(path, paint)
+
+        paint.color = ColorUtils.setAlphaComponent(stroke.color, 130)
+        paint.strokeWidth = strokePx * 1.5f
+        canvas.drawPath(path, paint)
+
+        paint.color = ColorUtils.setAlphaComponent(Color.WHITE, 250)
+        paint.strokeWidth = strokePx * 0.58f
+        canvas.drawPath(path, paint)
+    }
+
+    private fun drawMarkerStroke(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        stroke: DrawingStroke,
+        strokePx: Float
+    ) {
+        val path = buildSmoothPath(stroke.points, width, height)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = strokePx
+            color = ColorUtils.setAlphaComponent(stroke.color, 220)
+        }
+        canvas.drawPath(path, paint)
+    }
+
+    private fun buildSmoothPath(points: List<com.verso.lyrics.model.DrawingPoint>, width: Int, height: Int): Path {
+        val path = Path()
+        if (points.isEmpty()) return path
+        val firstX = points[0].x * width
+        val firstY = points[0].y * height
+        path.moveTo(firstX, firstY)
+        if (points.size == 1) {
+            path.lineTo(firstX + 0.5f, firstY + 0.5f)
+            return path
+        }
+        for (i in 1 until points.size) {
+            val prevX = points[i - 1].x * width
+            val prevY = points[i - 1].y * height
+            val curX = points[i].x * width
+            val curY = points[i].y * height
+            val midX = (prevX + curX) / 2f
+            val midY = (prevY + curY) / 2f
+            path.quadTo(prevX, prevY, midX, midY)
+        }
+        val last = points.last()
+        path.lineTo(last.x * width, last.y * height)
+        return path
+    }
+
+    private fun deterministicHash(a: Int, b: Int, c: Int): Float {
+        var x = a * 374761393 + b * 668265263 + c * 2147483647
+        x = (x xor (x ushr 13)) * 1274126177
+        x = x xor (x ushr 16)
+        return ((x and 0x7FFFFFFF).toFloat() / 0x7FFFFFFF.toFloat()).coerceIn(0f, 1f)
     }
 
     private fun drawCenterGuides(canvas: Canvas, width: Int, height: Int, config: StoryConfig) {
@@ -226,8 +388,8 @@ object LyricFrameRenderer {
         val artCorner = artSize * 0.22f
 
         canvas.save()
-        val clipPath = android.graphics.Path().apply {
-            addRoundRect(artRect, artCorner, artCorner, android.graphics.Path.Direction.CW)
+        val clipPath = Path().apply {
+            addRoundRect(artRect, artCorner, artCorner, Path.Direction.CW)
         }
         canvas.clipPath(clipPath)
         if (albumArt != null && !albumArt.isRecycled) {
@@ -348,6 +510,99 @@ object LyricFrameRenderer {
         }
     }
 
+    private fun drawStyledLayout(
+        canvas: Canvas,
+        text: CharSequence,
+        paint: TextPaint,
+        maxWidth: Int,
+        config: StoryConfig,
+        posMs: Long,
+        alpha: Int
+    ) {
+        when (config.effect) {
+            LyricEffect.NONE -> {
+                buildLayout(text, paint, maxWidth).draw(canvas)
+            }
+            LyricEffect.OUTLINE -> {
+                val lum = ColorUtils.calculateLuminance(paint.color)
+                val strokePaint = TextPaint(paint).apply {
+                    style = Paint.Style.STROKE
+                    strokeJoin = Paint.Join.ROUND
+                    strokeWidth = paint.textSize * 0.13f
+                    color = ColorUtils.setAlphaComponent(if (lum > 0.45) Color.BLACK else Color.WHITE, alpha)
+                    clearShadowLayer()
+                }
+                buildLayout(text, strokePaint, maxWidth).draw(canvas)
+                buildLayout(text, paint, maxWidth).draw(canvas)
+            }
+            LyricEffect.NEON -> {
+                val outerPaint = TextPaint(paint).apply {
+                    setShadowLayer(paint.textSize * 0.45f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, alpha))
+                }
+                val innerPaint = TextPaint(paint).apply {
+                    setShadowLayer(paint.textSize * 0.18f, 0f, 0f, ColorUtils.setAlphaComponent(config.accentColor, alpha))
+                }
+                buildLayout(text, outerPaint, maxWidth).draw(canvas)
+                buildLayout(text, innerPaint, maxWidth).draw(canvas)
+            }
+            LyricEffect.GLITCH -> {
+                val shift = paint.textSize * 0.055f * sin(posMs / 85.0).toFloat()
+                val shiftY = paint.textSize * 0.022f * cos(posMs / 60.0).toFloat()
+                val cyanPaint = TextPaint(paint).apply {
+                    color = ColorUtils.setAlphaComponent(0xFF00F0FF.toInt(), (alpha * 0.78f).toInt())
+                    clearShadowLayer()
+                }
+                val magentaPaint = TextPaint(paint).apply {
+                    color = ColorUtils.setAlphaComponent(0xFFFF0055.toInt(), (alpha * 0.78f).toInt())
+                    clearShadowLayer()
+                }
+                canvas.save()
+                canvas.translate(-shift, shiftY)
+                buildLayout(text, cyanPaint, maxWidth).draw(canvas)
+                canvas.restore()
+
+                canvas.save()
+                canvas.translate(shift, -shiftY)
+                buildLayout(text, magentaPaint, maxWidth).draw(canvas)
+                canvas.restore()
+
+                buildLayout(text, paint, maxWidth).draw(canvas)
+            }
+            LyricEffect.GRADIENT -> {
+                val gradPaint = TextPaint(paint)
+                if (config.animation != LyricAnimation.KARAOKE) {
+                    gradPaint.shader = LinearGradient(
+                        0f, 0f, maxWidth.toFloat(), 0f,
+                        intArrayOf(
+                            ColorUtils.setAlphaComponent(config.textColor, alpha),
+                            ColorUtils.setAlphaComponent(config.accentColor, alpha),
+                            ColorUtils.setAlphaComponent(0xFFFFD166.toInt(), alpha)
+                        ),
+                        null,
+                        Shader.TileMode.CLAMP
+                    )
+                }
+                buildLayout(text, gradPaint, maxWidth).draw(canvas)
+            }
+            LyricEffect.SHADOW_3D -> {
+                val depthColor = ColorUtils.blendARGB(config.accentColor, Color.BLACK, 0.35f)
+                val step = max(1.5f, paint.textSize * 0.028f)
+                val shadowPaint = TextPaint(paint).apply {
+                    color = ColorUtils.setAlphaComponent(depthColor, (alpha * 0.85f).toInt())
+                    clearShadowLayer()
+                }
+                val layout3d = buildLayout(text, shadowPaint, maxWidth)
+                for (layer in 5 downTo 1) {
+                    canvas.save()
+                    canvas.translate(step * layer, step * layer)
+                    layout3d.draw(canvas)
+                    canvas.restore()
+                }
+                buildLayout(text, paint, maxWidth).draw(canvas)
+            }
+        }
+    }
+
     private fun findWordBoundaryIndex(text: String, progress: Float): Int {
         if (text.isEmpty() || progress <= 0f) return 0
         if (progress >= 1f) return text.length
@@ -406,7 +661,7 @@ object LyricFrameRenderer {
         canvas.save()
         canvas.scale(anim.scale, anim.scale)
         canvas.translate(-maxWidth / 2f, activeTop)
-        activeLayout.draw(canvas)
+        drawStyledLayout(canvas, anim.text, activePaint, maxWidth, config, posMs, anim.alpha)
         canvas.restore()
 
         nextLayout?.let {
@@ -443,7 +698,7 @@ object LyricFrameRenderer {
         canvas.translate(0f, anim.offsetY)
         canvas.scale(anim.scale, anim.scale)
         canvas.translate(-maxWidth / 2f, -layout.height / 2f)
-        layout.draw(canvas)
+        drawStyledLayout(canvas, anim.text, paint, maxWidth, config, posMs, anim.alpha)
         canvas.restore()
     }
 
@@ -503,7 +758,7 @@ object LyricFrameRenderer {
 
         canvas.save()
         canvas.translate(-maxTextW / 2f, cardRect.top + padV)
-        mainLayout.draw(canvas)
+        drawStyledLayout(canvas, anim.text, mainPaint, maxTextW, config, posMs, anim.alpha)
         if (nextLayout != null) {
             canvas.translate(0f, mainLayout.height + gap)
             nextLayout.draw(canvas)
@@ -525,7 +780,6 @@ object LyricFrameRenderer {
         val currentIdx = activeIdx.coerceAtLeast(0)
         val anim = computeAnimation(canvasWidth, config, lines, currentIdx, posMs)
 
-        // Si el fondo es blanco o claro, texto oscuro para contraste; si es oscuro, texto blanco
         val lum = ColorUtils.calculateLuminance(config.accentColor)
         val autoTextColor = if (config.animation == LyricAnimation.KARAOKE) {
             config.textColor
@@ -562,7 +816,7 @@ object LyricFrameRenderer {
         canvas.scale(anim.scale, anim.scale)
         canvas.drawRoundRect(boxRect, radius, radius, boxPaint)
         canvas.translate(-maxTextW / 2f, -layout.height / 2f)
-        layout.draw(canvas)
+        drawStyledLayout(canvas, anim.text, paint, maxTextW, config, posMs, anim.alpha)
         canvas.restore()
     }
 
@@ -592,7 +846,7 @@ object LyricFrameRenderer {
         canvas.translate(0f, anim.offsetY)
         canvas.scale(anim.scale, anim.scale)
         canvas.translate(-maxWidth / 2f, -layout.height / 2f)
-        layout.draw(canvas)
+        drawStyledLayout(canvas, anim.text, paint, maxWidth, config, posMs, anim.alpha)
 
         val barW = canvasWidth * 0.18f
         val barH = max(4f, canvasWidth * 0.007f)

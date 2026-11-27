@@ -17,8 +17,12 @@ import com.verso.lyrics.data.DeviceAudioRepository
 import com.verso.lyrics.data.LyricsRepository
 import com.verso.lyrics.export.ExportResult
 import com.verso.lyrics.export.VideoExporter
+import com.verso.lyrics.model.BrushStyle
+import com.verso.lyrics.model.DrawingPoint
+import com.verso.lyrics.model.DrawingStroke
 import com.verso.lyrics.model.LocalTrack
 import com.verso.lyrics.model.LyricAnimation
+import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
@@ -62,6 +66,12 @@ sealed interface UpdateUiState {
     data class ReadyToInstall(val release: GithubReleaseInfo, val apkFile: File) : UpdateUiState
     data class Error(val message: String) : UpdateUiState
 }
+
+data class BrushConfig(
+    val style: BrushStyle = BrushStyle.CHALK,
+    val color: Int = 0xFFFFFFFF.toInt(),
+    val widthNorm: Float = 0.024f
+)
 
 class EditorViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -117,6 +127,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _hasPendingUpdate = MutableStateFlow(false)
     val hasPendingUpdate: StateFlow<Boolean> = _hasPendingUpdate.asStateFlow()
+
+    private val _brushConfig = MutableStateFlow(BrushConfig())
+    val brushConfig: StateFlow<BrushConfig> = _brushConfig.asStateFlow()
+
+    private val _activeStroke = MutableStateFlow<DrawingStroke?>(null)
+    val activeStroke: StateFlow<DrawingStroke?> = _activeStroke.asStateFlow()
 
     private var exportJob: Job? = null
     private var updateJob: Job? = null
@@ -275,7 +291,49 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setStyle(style: LyricStyle) = _config.update { it.copy(style = style) }
     fun setAnimation(animation: LyricAnimation) = _config.update { it.copy(animation = animation) }
+    fun setEffect(effect: LyricEffect) = _config.update { it.copy(effect = effect) }
     fun setFont(font: LyricFont) = _config.update { it.copy(font = font) }
+
+    fun setBrushStyle(style: BrushStyle) = _brushConfig.update { it.copy(style = style) }
+    fun setBrushColor(color: Int) = _brushConfig.update { it.copy(color = color) }
+    fun setBrushWidth(widthNorm: Float) = _brushConfig.update { it.copy(widthNorm = widthNorm.coerceIn(0.008f, 0.06f)) }
+
+    fun startStroke(xNorm: Float, yNorm: Float) {
+        val brush = _brushConfig.value
+        _activeStroke.value = DrawingStroke(
+            points = listOf(DrawingPoint(xNorm.coerceIn(0f, 1f), yNorm.coerceIn(0f, 1f))),
+            color = brush.color,
+            widthNorm = brush.widthNorm,
+            style = brush.style
+        )
+    }
+
+    fun appendStrokePoint(xNorm: Float, yNorm: Float) {
+        _activeStroke.update { current ->
+            current?.copy(
+                points = current.points + DrawingPoint(xNorm.coerceIn(0f, 1f), yNorm.coerceIn(0f, 1f))
+            )
+        }
+    }
+
+    fun finishStroke() {
+        val finished = _activeStroke.value ?: return
+        _activeStroke.value = null
+        if (finished.points.isNotEmpty()) {
+            _config.update { it.copy(strokes = it.strokes + finished) }
+        }
+    }
+
+    fun undoLastStroke() {
+        _config.update { cfg ->
+            if (cfg.strokes.isEmpty()) cfg else cfg.copy(strokes = cfg.strokes.dropLast(1))
+        }
+    }
+
+    fun clearAllStrokes() {
+        _activeStroke.value = null
+        _config.update { it.copy(strokes = emptyList()) }
+    }
     fun setTextColor(color: Int) = _config.update { it.copy(textColor = color) }
     fun setAccentColor(color: Int) = _config.update { it.copy(accentColor = color) }
     fun setBackgroundDim(dim: Float) = _config.update { it.copy(backgroundDim = dim.coerceIn(0f, 0.85f)) }

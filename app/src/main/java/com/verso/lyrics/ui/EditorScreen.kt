@@ -18,6 +18,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -40,12 +41,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCut
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.FormatListBulleted
 import androidx.compose.material.icons.rounded.MovieCreation
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -95,7 +99,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.verso.lyrics.model.BrushStyle
 import com.verso.lyrics.model.LyricAnimation
+import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
@@ -115,7 +121,8 @@ import com.verso.lyrics.update.GithubReleaseInfo
 private enum class DockPanel {
     TRAMO,
     ESTILO,
-    TEXTO
+    TEXTO,
+    DIBUJAR
 }
 
 @Composable
@@ -134,6 +141,8 @@ fun EditorScreen(viewModel: EditorViewModel) {
     val candidatesState by viewModel.candidatesState.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val hasPendingUpdate by viewModel.hasPendingUpdate.collectAsStateWithLifecycle()
+    val brushConfig by viewModel.brushConfig.collectAsStateWithLifecycle()
+    val activeStroke by viewModel.activeStroke.collectAsStateWithLifecycle()
 
     val audioPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_AUDIO
@@ -186,6 +195,11 @@ fun EditorScreen(viewModel: EditorViewModel) {
         config.lyricPosY != 0.55f ||
         config.lyricScale != 1.0f ||
         config.lyricRotationDeg != 0f
+
+    val isDrawingMode = activePanel == DockPanel.DIBUJAR
+    val renderConfig = remember(config, activeStroke) {
+        if (activeStroke == null) config else config.copy(strokes = config.strokes + activeStroke!!)
+    }
 
     Column(
         modifier = Modifier
@@ -290,26 +304,46 @@ fun EditorScreen(viewModel: EditorViewModel) {
                     .clip(RoundedCornerShape(24.dp))
                     .background(VersoSurface)
                     .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(24.dp))
-                    .pointerInput(Unit) {
-                        detectTapGestures {
-                            if (activePanel != null) {
-                                activePanel = null
-                            } else {
-                                viewModel.togglePlayPause()
+                    .pointerInput(isDrawingMode) {
+                        if (isDrawingMode) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    val w = size.width.toFloat().coerceAtLeast(1f)
+                                    val h = size.height.toFloat().coerceAtLeast(1f)
+                                    viewModel.startStroke(offset.x / w, offset.y / h)
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val w = size.width.toFloat().coerceAtLeast(1f)
+                                    val h = size.height.toFloat().coerceAtLeast(1f)
+                                    viewModel.appendStrokePoint(change.position.x / w, change.position.y / h)
+                                },
+                                onDragEnd = { viewModel.finishStroke() },
+                                onDragCancel = { viewModel.finishStroke() }
+                            )
+                        } else {
+                            detectTapGestures {
+                                if (activePanel != null) {
+                                    activePanel = null
+                                } else {
+                                    viewModel.togglePlayPause()
+                                }
                             }
                         }
                     }
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, pan, zoom, rotation ->
-                            isDraggingLyric = true
-                            val w = size.width.toFloat().coerceAtLeast(1f)
-                            val h = size.height.toFloat().coerceAtLeast(1f)
-                            viewModel.updateLyricTransform(
-                                dxFrac = pan.x / w,
-                                dyFrac = pan.y / h,
-                                scaleFactor = zoom,
-                                rotationDelta = rotation
-                            )
+                    .pointerInput(isDrawingMode) {
+                        if (!isDrawingMode) {
+                            detectTransformGestures { _, pan, zoom, rotation ->
+                                isDraggingLyric = true
+                                val w = size.width.toFloat().coerceAtLeast(1f)
+                                val h = size.height.toFloat().coerceAtLeast(1f)
+                                viewModel.updateLyricTransform(
+                                    dxFrac = pan.x / w,
+                                    dyFrac = pan.y / h,
+                                    scaleFactor = zoom,
+                                    rotationDelta = rotation
+                                )
+                            }
                         }
                     }
             ) {
@@ -320,12 +354,40 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             canvas = canvas.nativeCanvas,
                             width = size.width.toInt(),
                             height = size.height.toInt(),
-                            config = config,
+                            config = renderConfig,
                             lines = lyricsLines,
                             positionMs = currentPositionMs,
                             photoBitmap = photoBitmap,
                             albumArtBitmap = albumArtBitmap,
-                            showCenterGuides = isDraggingLyric
+                            showCenterGuides = isDraggingLyric && !isDrawingMode
+                        )
+                    }
+                }
+
+                // Indicador de modo dibujo sobre la foto
+                if (isDrawingMode) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 12.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Color.Black.copy(alpha = 0.65f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Traza sobre la foto",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Listo",
+                            color = VersoAccent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { activePanel = null }
                         )
                     }
                 }
@@ -476,6 +538,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             config = config,
                             onSelectStyle = viewModel::setStyle,
                             onSelectAnimation = viewModel::setAnimation,
+                            onSelectEffect = viewModel::setEffect,
                             onToggleBadge = viewModel::toggleSongBadge
                         )
                         DockPanel.TEXTO -> TextoYColorControls(
@@ -486,21 +549,32 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             onSelectAccentColor = viewModel::setAccentColor,
                             onDimChange = viewModel::setBackgroundDim
                         )
+                        DockPanel.DIBUJAR -> DibujarControls(
+                            brushConfig = brushConfig,
+                            paletteColors = paletteColors,
+                            hasStrokes = config.strokes.isNotEmpty(),
+                            onSelectBrush = viewModel::setBrushStyle,
+                            onSelectColor = viewModel::setBrushColor,
+                            onWidthChange = viewModel::setBrushWidth,
+                            onUndo = viewModel::undoLastStroke,
+                            onClear = viewModel::clearAllStrokes
+                        )
                         null -> Unit
                     }
                 }
             }
         }
 
-        // Dock inferior rápido de 5 acciones
+        // Dock inferior rápido de 6 acciones
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .clip(RoundedCornerShape(22.dp))
                 .background(VersoSurface)
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 6.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             DockItem(
@@ -540,6 +614,13 @@ fun EditorScreen(viewModel: EditorViewModel) {
                 selected = activePanel == DockPanel.TEXTO
             ) {
                 activePanel = if (activePanel == DockPanel.TEXTO) null else DockPanel.TEXTO
+            }
+            DockItem(
+                icon = Icons.Rounded.Brush,
+                label = "Dibujar",
+                selected = activePanel == DockPanel.DIBUJAR
+            ) {
+                activePanel = if (activePanel == DockPanel.DIBUJAR) null else DockPanel.DIBUJAR
             }
         }
     }
@@ -730,7 +811,7 @@ private fun TramoControls(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    Icons.Rounded.FormatListBulleted,
+                    Icons.AutoMirrored.Rounded.FormatListBulleted,
                     contentDescription = null,
                     tint = VersoAccent,
                     modifier = Modifier.size(15.dp)
@@ -833,6 +914,7 @@ private fun EstiloYAnimacionControls(
     config: StoryConfig,
     onSelectStyle: (LyricStyle) -> Unit,
     onSelectAnimation: (LyricAnimation) -> Unit,
+    onSelectEffect: (LyricEffect) -> Unit,
     onToggleBadge: () -> Unit
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -853,7 +935,7 @@ private fun EstiloYAnimacionControls(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text("Animación", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
         Spacer(modifier = Modifier.height(4.dp))
         Row(
@@ -876,6 +958,24 @@ private fun EstiloYAnimacionControls(
         }
 
         Spacer(modifier = Modifier.height(6.dp))
+        Text("Efecto", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            LyricEffect.entries.forEach { effect ->
+                FilterChip(
+                    selected = config.effect == effect,
+                    onClick = { onSelectEffect(effect) },
+                    label = { Text(effect.label, fontSize = 12.sp) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -883,6 +983,107 @@ private fun EstiloYAnimacionControls(
         ) {
             Text("Tarjeta de canción", style = MaterialTheme.typography.bodySmall)
             Switch(checked = config.showSongBadge, onCheckedChange = { onToggleBadge() })
+        }
+    }
+}
+
+@Composable
+private fun DibujarControls(
+    brushConfig: BrushConfig,
+    paletteColors: List<Int>,
+    hasStrokes: Boolean,
+    onSelectBrush: (BrushStyle) -> Unit,
+    onSelectColor: (Int) -> Unit,
+    onWidthChange: (Float) -> Unit,
+    onUndo: () -> Unit,
+    onClear: () -> Unit
+) {
+    val brushPalette = remember(paletteColors) {
+        (listOf(
+            0xFFFFFFFF.toInt(),
+            0xFFFF5C8A.toInt(),
+            0xFFFFD166.toInt(),
+            0xFF38BDF8.toInt(),
+            0xFF4ADE80.toInt(),
+            0xFFA855F7.toInt(),
+            0xFF111118.toInt()
+        ) + paletteColors).distinct()
+    }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrushStyle.entries.forEach { brush ->
+                    FilterChip(
+                        selected = brushConfig.style == brush,
+                        onClick = { onSelectBrush(brush) },
+                        label = { Text(brush.label, fontSize = 12.sp) }
+                    )
+                }
+            }
+            Row {
+                IconButton(onClick = onUndo, enabled = hasStrokes) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.Undo,
+                        contentDescription = "Deshacer",
+                        tint = if (hasStrokes) Color.White else VersoTextSecondary
+                    )
+                }
+                IconButton(onClick = onClear, enabled = hasStrokes) {
+                    Icon(
+                        Icons.Rounded.DeleteOutline,
+                        contentDescription = "Borrar trazos",
+                        tint = if (hasStrokes) VersoAccent else VersoTextSecondary
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Color:", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+            brushPalette.forEach { argb ->
+                val selected = brushConfig.color == argb
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color(argb))
+                        .border(
+                            width = if (selected) 2.5.dp else 1.dp,
+                            color = if (selected) VersoAccent else Color.White.copy(alpha = 0.25f),
+                            shape = CircleShape
+                        )
+                        .clickable { onSelectColor(argb) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Grosor", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+            Spacer(modifier = Modifier.width(10.dp))
+            Slider(
+                value = brushConfig.widthNorm,
+                onValueChange = onWidthChange,
+                valueRange = 0.008f..0.055f,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

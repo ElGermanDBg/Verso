@@ -23,6 +23,34 @@ enum class LyricAnimation(val label: String) {
     GLOW_PULSE("Neón")
 }
 
+/** Efectos visuales aplicados al texto del verso activo. */
+enum class LyricEffect(val label: String) {
+    NONE("Normal"),
+    NEON("Neón"),
+    OUTLINE("Contorno"),
+    GLITCH("Glitch"),
+    GRADIENT("Degradado"),
+    SHADOW_3D("3D")
+}
+
+/** Pinceles de dibujo libre sobre la foto. */
+enum class BrushStyle(val label: String) {
+    CHALK("Tiza"),
+    NEON("Neón"),
+    MARKER("Marcador")
+}
+
+/** Punto normalizado (0..1) dentro del lienzo 9:16. */
+data class DrawingPoint(val x: Float, val y: Float)
+
+/** Trazo dibujado sobre la foto con coordenadas normalizadas. */
+data class DrawingStroke(
+    val points: List<DrawingPoint>,
+    val color: Int,
+    val widthNorm: Float,
+    val style: BrushStyle
+)
+
 /** Familias tipográficas embebidas para el bloque de letras. */
 enum class LyricFont(val label: String, @FontRes val fontRes: Int) {
     MODERNA("Moderna", R.font.font_moderna),
@@ -42,6 +70,7 @@ data class StoryConfig(
     val lyricsOffsetMs: Int = 0,
     val style: LyricStyle = LyricStyle.SCROLL,
     val animation: LyricAnimation = LyricAnimation.FADE_UP,
+    val effect: LyricEffect = LyricEffect.NONE,
     val font: LyricFont = LyricFont.MODERNA,
     val textColor: Int = 0xFFFFFFFF.toInt(),
     val accentColor: Int = 0xFFFF5C8A.toInt(),
@@ -50,5 +79,6 @@ data class StoryConfig(
     val lyricPosX: Float = 0.5f,
     val lyricPosY: Float = 0.55f,
     val lyricScale: Float = 1.0f,
-    val lyricRotationDeg: Float = 0f
+    val lyricRotationDeg: Float = 0f,
+    val strokes: List<DrawingStroke> = emptyList()
 )

@@ -1,7 +1,9 @@
 package com.verso.lyrics
 
+import com.verso.lyrics.model.BrushStyle
 import com.verso.lyrics.model.LrcParser
 import com.verso.lyrics.model.LyricAnimation
+import com.verso.lyrics.model.LyricEffect
 import com.verso.lyrics.model.LyricFont
 import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
@@ -56,5 +58,7 @@ class LrcParserAndNormalizerTest {
         assertEquals(6, LyricFont.entries.size)
         assertEquals(5, LyricStyle.entries.size)
         assertEquals(6, LyricAnimation.entries.size)
+        assertEquals(6, LyricEffect.entries.size)
+        assertEquals(3, BrushStyle.entries.size)
     }
 }
