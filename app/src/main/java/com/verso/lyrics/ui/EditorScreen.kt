@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.FormatListBulleted
 import androidx.compose.material.icons.rounded.MovieCreation
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -89,15 +90,18 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.verso.lyrics.model.LyricAnimation
 import com.verso.lyrics.model.LyricFont
+import com.verso.lyrics.model.LyricLine
 import com.verso.lyrics.model.LyricStyle
 import com.verso.lyrics.model.LyricsState
 import com.verso.lyrics.model.StoryConfig
+import com.verso.lyrics.model.activeLyricIndex
 import com.verso.lyrics.render.LyricFrameRenderer
 import com.verso.lyrics.ui.theme.VersoAccent
 import com.verso.lyrics.ui.theme.VersoBg
@@ -143,6 +147,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
         )
     }
     var showTrackPicker by remember { mutableStateOf(false) }
+    var showLinePicker by remember { mutableStateOf(false) }
     var activePanel by remember { mutableStateOf<DockPanel?>(null) }
     var isDraggingLyric by remember { mutableStateOf(false) }
 
@@ -458,10 +463,13 @@ fun EditorScreen(viewModel: EditorViewModel) {
                         DockPanel.TRAMO -> TramoControls(
                             config = config,
                             lyricsState = lyricsState,
+                            currentPositionMs = currentPositionMs,
                             onClipStartChange = viewModel::setClipStart,
+                            onNudgeStart = viewModel::nudgeClipStart,
                             onDurationSelect = viewModel::setClipDuration,
                             onAdjustOffset = viewModel::adjustLyricsOffset,
                             onResetOffset = viewModel::resetLyricsOffset,
+                            onOpenLinePicker = { showLinePicker = true },
                             onChangeLyrics = viewModel::openCandidatesPicker
                         )
                         DockPanel.ESTILO -> EstiloYAnimacionControls(
@@ -544,6 +552,20 @@ fun EditorScreen(viewModel: EditorViewModel) {
             onRequestPermission = { permissionLauncher.launch(audioPermission) },
             onSelectTrack = viewModel::selectTrack,
             onDismiss = { showTrackPicker = false }
+        )
+    }
+
+    if (showLinePicker) {
+        val synced = (lyricsState as? LyricsState.Available)?.synced == true
+        LyricLinePickerSheet(
+            lines = lyricsLines,
+            isSynced = synced,
+            clipStartMs = config.clipStartMs,
+            clipDurationMs = config.clipDurationMs,
+            lyricsOffsetMs = config.lyricsOffsetMs,
+            onSelectStartMs = viewModel::setClipStart,
+            onOpenSearchLyrics = viewModel::openCandidatesPicker,
+            onDismiss = { showLinePicker = false }
         )
     }
 
@@ -651,12 +673,17 @@ private fun DockItem(
 private fun TramoControls(
     config: StoryConfig,
     lyricsState: LyricsState,
+    currentPositionMs: Long,
     onClipStartChange: (Long) -> Unit,
+    onNudgeStart: (Long) -> Unit,
     onDurationSelect: (Long) -> Unit,
     onAdjustOffset: (Int) -> Unit,
     onResetOffset: () -> Unit,
+    onOpenLinePicker: () -> Unit,
     onChangeLyrics: () -> Unit
 ) {
+    var showSyncTools by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         val track = config.track
         if (track == null) {
@@ -668,39 +695,126 @@ private fun TramoControls(
             return
         }
 
-        val maxStart = (track.durationMs - config.clipDurationMs).coerceAtLeast(1L)
+        val lines = (lyricsState as? LyricsState.Available)?.lines.orEmpty()
+        val startLyricText = remember(lines, config.clipStartMs, config.lyricsOffsetMs) {
+            val idx = activeLyricIndex(lines, (config.clipStartMs + config.lyricsOffsetMs).coerceAtLeast(0L))
+            if (idx >= 0) lines[idx].text else lines.firstOrNull()?.text
+        }
+
+        // Vista previa del verso inicial + botón para elegir por verso
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Tramo: ${formatMs(config.clipStartMs)} — ${formatMs(config.clipStartMs + config.clipDurationMs)}",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold
+                text = if (!startLyricText.isNullOrBlank()) {
+                    "♫ $startLyricText"
+                } else {
+                    "Tramo: ${formatMs(config.clipStartMs)} — ${formatMs(config.clipStartMs + config.clipDurationMs)}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(15_000L to "15s", 30_000L to "30s", 45_000L to "45s").forEach { (dur, label) ->
-                    FilterChip(
-                        selected = config.clipDurationMs == dur,
-                        onClick = { onDurationSelect(dur) },
-                        label = { Text(label, fontSize = 11.sp) }
-                    )
-                }
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(VersoAccent.copy(alpha = 0.2f))
+                    .clickable(onClick = onOpenLinePicker)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Rounded.FormatListBulleted,
+                    contentDescription = null,
+                    tint = VersoAccent,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Elegir verso",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = VersoAccent
+                )
             }
         }
 
-        Slider(
-            value = (config.clipStartMs.toFloat() / maxStart.toFloat()).coerceIn(0f, 1f),
-            onValueChange = { frac -> onClipStartChange((frac * maxStart).toLong()) }
+        Spacer(modifier = Modifier.height(10.dp))
+
+        InstagramClipScrubber(
+            trackId = track.id,
+            totalDurationMs = track.durationMs,
+            clipStartMs = config.clipStartMs,
+            clipDurationMs = config.clipDurationMs,
+            currentPositionMs = currentPositionMs,
+            onClipStartChange = onClipStartChange
         )
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${formatMs(config.clipStartMs)} — ${formatMs((config.clipStartMs + config.clipDurationMs).coerceAtMost(track.durationMs))}",
+                fontSize = 11.sp,
+                color = VersoTextSecondary,
+                fontWeight = FontWeight.Medium
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                OffsetChip("-1s") { onNudgeStart(-1_000L) }
+                OffsetChip("+1s") { onNudgeStart(1_000L) }
+                listOf(15_000L to "15s", 30_000L to "30s", 45_000L to "45s").forEach { (dur, label) ->
+                    val selected = config.clipDurationMs == dur
+                    OffsetChip(text = label, highlight = selected) { onDurationSelect(dur) }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(
+                onClick = { showSyncTools = !showSyncTools },
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = if (showSyncTools) "Ocultar sincronía" else "Ajustar sincronía",
+                    fontSize = 11.sp,
+                    color = VersoTextSecondary
+                )
+            }
+            TextButton(onClick = onChangeLyrics, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+                Icon(Icons.Rounded.SwapVert, contentDescription = null, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = if (lyricsState is LyricsState.Loading) "Buscando…" else "Cambiar letra",
+                    fontSize = 11.sp
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = showSyncTools) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Offset:", fontSize = 11.sp, color = VersoTextSecondary)
                 OffsetChip("-0.5s") { onAdjustOffset(-500) }
                 OffsetChip("-0.1s") { onAdjustOffset(-100) }
                 OffsetChip(
@@ -709,15 +823,6 @@ private fun TramoControls(
                 ) { onResetOffset() }
                 OffsetChip("+0.1s") { onAdjustOffset(100) }
                 OffsetChip("+0.5s") { onAdjustOffset(500) }
-            }
-
-            TextButton(onClick = onChangeLyrics, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                Icon(Icons.Rounded.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = if (lyricsState is LyricsState.Loading) "Buscando…" else "Cambiar letra",
-                    fontSize = 12.sp
-                )
             }
         }
     }

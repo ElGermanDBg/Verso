@@ -240,6 +240,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _currentPositionMs.value = clamped
     }
 
+    fun nudgeClipStart(deltaMs: Long) {
+        setClipStart(_config.value.clipStartMs + deltaMs)
+    }
+
     fun setClipDuration(durationMs: Long) {
         val track = _config.value.track
         val clampedDur = if (track != null) {
