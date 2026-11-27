@@ -14,6 +14,7 @@ import com.verso.lyrics.model.LyricsNormalizer
 import com.verso.lyrics.model.PhotoFilter
 import com.verso.lyrics.model.activeLyricIndex
 import com.verso.lyrics.render.SubjectSegmenter
+import com.verso.lyrics.ui.VERSO_PRESETS
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -146,5 +147,17 @@ class LrcParserAndNormalizerTest {
             addMode = true
         )
         assertEquals(180, outside)
+    }
+
+    @Test
+    fun versoPresetsAreWellFormed() {
+        assertEquals(6, VERSO_PRESETS.size)
+        val ids = VERSO_PRESETS.map { it.id }.toSet()
+        assertEquals(VERSO_PRESETS.size, ids.size)
+        VERSO_PRESETS.forEach { preset ->
+            assert(preset.name.isNotBlank())
+            assert(preset.tagline.isNotBlank())
+            assert(preset.previewColors.size >= 2)
+        }
     }
 }

@@ -493,6 +493,47 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun seekWithinClip(fraction: Float) {
+        val cfg = _config.value
+        val track = cfg.track ?: return
+        val start = cfg.clipStartMs.coerceAtLeast(0L)
+        val dur = cfg.clipDurationMs.coerceAtLeast(1_000L)
+        val target = (start + (dur * fraction.coerceIn(0f, 1f)).toLong())
+            .coerceIn(0L, track.durationMs.coerceAtLeast(0L))
+        player.seekTo(target)
+        _currentPositionMs.value = target
+    }
+
+    fun applyPreset(preset: StoryPreset) {
+        _config.update {
+            it.copy(
+                style = preset.style,
+                animation = preset.animation,
+                effect = preset.effect,
+                font = preset.font,
+                beatPulseEnabled = preset.beatPulse
+            )
+        }
+        prefs.edit()
+            .putString("style", preset.style.name)
+            .putString("animation", preset.animation.name)
+            .putString("effect", preset.effect.name)
+            .putString("font", preset.font.name)
+            .putBoolean("beatPulseEnabled", preset.beatPulse)
+            .apply()
+
+        if (preset.beatPulse) {
+            analyzeBeatForCurrentClip(debounceMs = 0L)
+        } else {
+            beatJob?.cancel()
+            _isAnalyzingBeat.value = false
+        }
+
+        if (preset.behindSubject && _photoBitmap.value != null && !_config.value.lyricsBehindSubject) {
+            toggleLyricsBehindSubject()
+        }
+    }
+
     fun adjustLyricsOffset(deltaMs: Int) {
         val track = _config.value.track
         val next = (_config.value.lyricsOffsetMs + deltaMs).coerceIn(-10_000, 10_000)
