@@ -142,6 +142,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _foregroundBitmap = MutableStateFlow<Bitmap?>(null)
     val foregroundBitmap: StateFlow<Bitmap?> = _foregroundBitmap.asStateFlow()
 
+    private val _subjectMaskBitmap = MutableStateFlow<Bitmap?>(null)
+    val subjectMaskBitmap: StateFlow<Bitmap?> = _subjectMaskBitmap.asStateFlow()
+
+    private val _maskVersion = MutableStateFlow(0)
+    val maskVersion: StateFlow<Int> = _maskVersion.asStateFlow()
+
+    private val _maskAddMode = MutableStateFlow(true)
+    val maskAddMode: StateFlow<Boolean> = _maskAddMode.asStateFlow()
+
+    private val _maskBrushRadiusNorm = MutableStateFlow(0.055f)
+    val maskBrushRadiusNorm: StateFlow<Float> = _maskBrushRadiusNorm.asStateFlow()
+
     private val _isSegmentingSubject = MutableStateFlow(false)
     val isSegmentingSubject: StateFlow<Boolean> = _isSegmentingSubject.asStateFlow()
 
@@ -209,12 +221,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     _config.update { it.copy(accentColor = firstAccent) }
                 }
                 _foregroundBitmap.value = null
+                _subjectMaskBitmap.value = null
+                _maskVersion.value += 1
                 _segmentationError.value = null
                 if (_config.value.lyricsBehindSubject) {
                     runSegmentation(bmp)
                 }
             } else {
                 _foregroundBitmap.value = null
+                _subjectMaskBitmap.value = null
             }
         }
     }
@@ -237,20 +252,80 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun ensureMaskReadyForManualEdit() {
+        val photo = _photoBitmap.value ?: return
+        if (_subjectMaskBitmap.value == null) {
+            _subjectMaskBitmap.value = SubjectSegmenter.createEmptyMask(photo)
+            _maskVersion.value += 1
+        }
+        _segmentationError.value = null
+        _config.update { it.copy(lyricsBehindSubject = true) }
+    }
+
+    fun setMaskAddMode(add: Boolean) {
+        _maskAddMode.value = add
+    }
+
+    fun setMaskBrushRadius(norm: Float) {
+        _maskBrushRadiusNorm.value = norm.coerceIn(0.015f, 0.14f)
+    }
+
+    fun paintMaskStroke(x1: Float, y1: Float, x2: Float, y2: Float, radiusMaskPx: Float) {
+        val mask = _subjectMaskBitmap.value ?: return
+        SubjectSegmenter.paintMaskSegment(
+            maskBitmap = mask,
+            x1 = x1,
+            y1 = y1,
+            x2 = x2,
+            y2 = y2,
+            radiusPx = radiusMaskPx,
+            addMode = _maskAddMode.value
+        )
+        _maskVersion.value += 1
+    }
+
+    fun commitMaskToForeground() {
+        val photo = _photoBitmap.value ?: return
+        val mask = _subjectMaskBitmap.value ?: return
+        viewModelScope.launch {
+            val fg = withContext(Dispatchers.Default) {
+                SubjectSegmenter.applyMask(photo, mask)
+            }
+            _foregroundBitmap.value = fg
+            _config.update { it.copy(lyricsBehindSubject = true) }
+        }
+    }
+
+    fun resetMaskWithAi() {
+        val photo = _photoBitmap.value ?: return
+        runSegmentation(photo)
+    }
+
+    fun clearMask() {
+        val photo = _photoBitmap.value ?: return
+        val empty = SubjectSegmenter.createEmptyMask(photo)
+        _subjectMaskBitmap.value = empty
+        _maskVersion.value += 1
+        commitMaskToForeground()
+    }
+
     private fun runSegmentation(bmp: Bitmap) {
         segmentJob?.cancel()
         segmentJob = viewModelScope.launch {
             _isSegmentingSubject.value = true
             _segmentationError.value = null
-            val fg = SubjectSegmenter.extractForeground(bmp)
+            val result = SubjectSegmenter.extractMaskAndForeground(bmp)
             _isSegmentingSubject.value = false
-            if (fg != null) {
-                _foregroundBitmap.value = fg
+            if (result != null) {
+                _subjectMaskBitmap.value = result.maskBitmap
+                _foregroundBitmap.value = result.foregroundBitmap
+                _maskVersion.value += 1
                 _config.update { it.copy(lyricsBehindSubject = true) }
             } else {
+                _subjectMaskBitmap.value = null
                 _foregroundBitmap.value = null
                 _config.update { it.copy(lyricsBehindSubject = false) }
-                _segmentationError.value = "No se detectó una persona en esta foto."
+                _segmentationError.value = "No se detectó persona. Puedes pintarla manualmente."
             }
         }
     }

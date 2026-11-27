@@ -150,6 +150,10 @@ fun EditorScreen(viewModel: EditorViewModel) {
     val brushConfig by viewModel.brushConfig.collectAsStateWithLifecycle()
     val activeStroke by viewModel.activeStroke.collectAsStateWithLifecycle()
     val foregroundBitmap by viewModel.foregroundBitmap.collectAsStateWithLifecycle()
+    val subjectMaskBitmap by viewModel.subjectMaskBitmap.collectAsStateWithLifecycle()
+    val maskVersion by viewModel.maskVersion.collectAsStateWithLifecycle()
+    val maskAddMode by viewModel.maskAddMode.collectAsStateWithLifecycle()
+    val maskBrushRadiusNorm by viewModel.maskBrushRadiusNorm.collectAsStateWithLifecycle()
     val isSegmentingSubject by viewModel.isSegmentingSubject.collectAsStateWithLifecycle()
     val segmentationError by viewModel.segmentationError.collectAsStateWithLifecycle()
 
@@ -168,6 +172,15 @@ fun EditorScreen(viewModel: EditorViewModel) {
     var showLinePicker by remember { mutableStateOf(false) }
     var activePanel by remember { mutableStateOf<DockPanel?>(null) }
     var isDraggingLyric by remember { mutableStateOf(false) }
+    var isMaskEditMode by remember { mutableStateOf(false) }
+    var lastMaskPoint by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+
+    LaunchedEffect(activePanel) {
+        if (activePanel != DockPanel.ESTILO && isMaskEditMode) {
+            isMaskEditMode = false
+            viewModel.commitMaskToForeground()
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -351,8 +364,49 @@ fun EditorScreen(viewModel: EditorViewModel) {
                     .clip(RoundedCornerShape(24.dp))
                     .background(VersoSurface)
                     .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(24.dp))
-                    .pointerInput(isDrawingMode) {
-                        if (isDrawingMode) {
+                    .pointerInput(isDrawingMode, isMaskEditMode, subjectMaskBitmap, maskBrushRadiusNorm) {
+                        if (isMaskEditMode) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    val mask = subjectMaskBitmap ?: return@detectDragGestures
+                                    val rect = LyricFrameRenderer.computeCenterCropRect(
+                                        mask.width.toFloat(),
+                                        mask.height.toFloat(),
+                                        size.width,
+                                        size.height
+                                    )
+                                    val mx = ((offset.x - rect.left) / rect.width()) * mask.width
+                                    val my = ((offset.y - rect.top) / rect.height()) * mask.height
+                                    val radiusMaskPx = maskBrushRadiusNorm * mask.width
+                                    lastMaskPoint = mx to my
+                                    viewModel.paintMaskStroke(mx, my, mx + 0.5f, my + 0.5f, radiusMaskPx)
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val mask = subjectMaskBitmap ?: return@detectDragGestures
+                                    val rect = LyricFrameRenderer.computeCenterCropRect(
+                                        mask.width.toFloat(),
+                                        mask.height.toFloat(),
+                                        size.width,
+                                        size.height
+                                    )
+                                    val mx = ((change.position.x - rect.left) / rect.width()) * mask.width
+                                    val my = ((change.position.y - rect.top) / rect.height()) * mask.height
+                                    val prev = lastMaskPoint ?: (mx to my)
+                                    val radiusMaskPx = maskBrushRadiusNorm * mask.width
+                                    viewModel.paintMaskStroke(prev.first, prev.second, mx, my, radiusMaskPx)
+                                    lastMaskPoint = mx to my
+                                },
+                                onDragEnd = {
+                                    lastMaskPoint = null
+                                    viewModel.commitMaskToForeground()
+                                },
+                                onDragCancel = {
+                                    lastMaskPoint = null
+                                    viewModel.commitMaskToForeground()
+                                }
+                            )
+                        } else if (isDrawingMode) {
                             detectDragGestures(
                                 onDragStart = { offset ->
                                     val w = size.width.toFloat().coerceAtLeast(1f)
@@ -378,8 +432,8 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             }
                         }
                     }
-                    .pointerInput(isDrawingMode) {
-                        if (!isDrawingMode) {
+                    .pointerInput(isDrawingMode, isMaskEditMode) {
+                        if (!isDrawingMode && !isMaskEditMode) {
                             detectTransformGestures { _, pan, zoom, rotation ->
                                 isDraggingLyric = true
                                 val w = size.width.toFloat().coerceAtLeast(1f)
@@ -395,6 +449,8 @@ fun EditorScreen(viewModel: EditorViewModel) {
                     }
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
+                    // Leer maskVersion asegura redibujo inmediato mientras se pinta la silueta
+                    val currentMaskVer = maskVersion
                     drawIntoCanvas { canvas ->
                         LyricFrameRenderer.drawFrame(
                             context = context,
@@ -406,25 +462,27 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             positionMs = currentPositionMs,
                             photoBitmap = photoBitmap,
                             albumArtBitmap = albumArtBitmap,
-                            foregroundBitmap = foregroundBitmap,
-                            showCenterGuides = isDraggingLyric && !isDrawingMode
+                            foregroundBitmap = if (currentMaskVer >= 0) foregroundBitmap else null,
+                            maskOverlayBitmap = subjectMaskBitmap,
+                            showMaskOverlay = isMaskEditMode,
+                            showCenterGuides = isDraggingLyric && !isDrawingMode && !isMaskEditMode
                         )
                     }
                 }
 
-                // Indicador de modo dibujo sobre la foto
-                if (isDrawingMode) {
+                // Indicador de modo dibujo o edición de silueta sobre la foto
+                if (isDrawingMode || isMaskEditMode) {
                     Row(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .padding(top = 12.dp)
                             .clip(RoundedCornerShape(18.dp))
-                            .background(Color.Black.copy(alpha = 0.65f))
+                            .background(Color.Black.copy(alpha = 0.72f))
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Traza sobre la foto",
+                            text = if (isMaskEditMode) "Pinta la persona en rosa" else "Traza sobre la foto",
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium
@@ -435,7 +493,14 @@ fun EditorScreen(viewModel: EditorViewModel) {
                             color = VersoAccent,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.clickable { activePanel = null }
+                            modifier = Modifier.clickable {
+                                if (isMaskEditMode) {
+                                    isMaskEditMode = false
+                                    viewModel.commitMaskToForeground()
+                                } else {
+                                    activePanel = null
+                                }
+                            }
                         )
                     }
                 }
@@ -613,17 +678,37 @@ fun EditorScreen(viewModel: EditorViewModel) {
                                 onOpenLinePicker = { showLinePicker = true },
                                 onChangeLyrics = viewModel::openCandidatesPicker
                             )
-                            DockPanel.ESTILO -> EstiloYAnimacionControls(
-                                config = config,
-                                hasPhoto = photoBitmap != null,
-                                isSegmenting = isSegmentingSubject,
-                                segmentationError = segmentationError,
-                                onSelectStyle = viewModel::setStyle,
-                                onSelectAnimation = viewModel::setAnimation,
-                                onSelectEffect = viewModel::setEffect,
-                                onToggleBehindSubject = viewModel::toggleLyricsBehindSubject,
-                                onToggleBadge = viewModel::toggleSongBadge
-                            )
+                            DockPanel.ESTILO -> if (isMaskEditMode) {
+                                MaskEditControls(
+                                    addMode = maskAddMode,
+                                    brushRadiusNorm = maskBrushRadiusNorm,
+                                    isSegmenting = isSegmentingSubject,
+                                    onSetAddMode = viewModel::setMaskAddMode,
+                                    onBrushRadiusChange = viewModel::setMaskBrushRadius,
+                                    onAutoAi = viewModel::resetMaskWithAi,
+                                    onClear = viewModel::clearMask,
+                                    onDone = {
+                                        isMaskEditMode = false
+                                        viewModel.commitMaskToForeground()
+                                    }
+                                )
+                            } else {
+                                EstiloYAnimacionControls(
+                                    config = config,
+                                    hasPhoto = photoBitmap != null,
+                                    isSegmenting = isSegmentingSubject,
+                                    segmentationError = segmentationError,
+                                    onSelectStyle = viewModel::setStyle,
+                                    onSelectAnimation = viewModel::setAnimation,
+                                    onSelectEffect = viewModel::setEffect,
+                                    onToggleBehindSubject = viewModel::toggleLyricsBehindSubject,
+                                    onOpenManualMaskEdit = {
+                                        viewModel.ensureMaskReadyForManualEdit()
+                                        isMaskEditMode = true
+                                    },
+                                    onToggleBadge = viewModel::toggleSongBadge
+                                )
+                            }
                             DockPanel.TEXTO -> TextoYColorControls(
                                 config = config,
                                 paletteColors = paletteColors,
@@ -998,6 +1083,74 @@ private fun TramoControls(
 }
 
 @Composable
+private fun MaskEditControls(
+    addMode: Boolean,
+    brushRadiusNorm: Float,
+    isSegmenting: Boolean,
+    onSetAddMode: (Boolean) -> Unit,
+    onBrushRadiusChange: (Float) -> Unit,
+    onAutoAi: () -> Unit,
+    onClear: () -> Unit,
+    onDone: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = addMode,
+                    onClick = { onSetAddMode(true) },
+                    label = { Text("+ Persona", fontSize = 12.sp) }
+                )
+                FilterChip(
+                    selected = !addMode,
+                    onClick = { onSetAddMode(false) },
+                    label = { Text("- Fondo", fontSize = 12.sp) }
+                )
+            }
+            Button(
+                onClick = onDone,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text("Listo", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Pincel", style = MaterialTheme.typography.labelSmall, color = VersoTextSecondary)
+            Spacer(modifier = Modifier.width(10.dp))
+            Slider(
+                value = brushRadiusNorm,
+                onValueChange = onBrushRadiusChange,
+                valueRange = 0.015f..0.14f,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onAutoAi, enabled = !isSegmenting) {
+                Text(if (isSegmenting) "Detectando…" else "Auto IA", fontSize = 12.sp)
+            }
+            TextButton(onClick = onClear) {
+                Text("Limpiar todo", fontSize = 12.sp, color = VersoAccent)
+            }
+        }
+    }
+}
+
+@Composable
 private fun EstiloYAnimacionControls(
     config: StoryConfig,
     hasPhoto: Boolean,
@@ -1007,6 +1160,7 @@ private fun EstiloYAnimacionControls(
     onSelectAnimation: (LyricAnimation) -> Unit,
     onSelectEffect: (LyricEffect) -> Unit,
     onToggleBehindSubject: () -> Unit,
+    onOpenManualMaskEdit: () -> Unit,
     onToggleBadge: () -> Unit
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -1068,6 +1222,21 @@ private fun EstiloYAnimacionControls(
                     onCheckedChange = { if (hasPhoto) onToggleBehindSubject() },
                     enabled = hasPhoto
                 )
+            }
+        }
+
+        if (hasPhoto) {
+            Spacer(modifier = Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = onOpenManualMaskEdit,
+                enabled = !isSegmenting,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Rounded.Brush, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Ajustar contorno manualmente", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 

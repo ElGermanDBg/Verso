@@ -74,6 +74,8 @@ object LyricFrameRenderer {
         photoBitmap: Bitmap?,
         albumArtBitmap: Bitmap?,
         foregroundBitmap: Bitmap? = null,
+        maskOverlayBitmap: Bitmap? = null,
+        showMaskOverlay: Boolean = false,
         showCenterGuides: Boolean = false
     ) {
         if (width <= 0 || height <= 0) return
@@ -122,7 +124,7 @@ object LyricFrameRenderer {
                 height
             )
             val fgPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-                colorFilter = colorFilterFor(config.photoFilter)
+                colorFilter = colorFilterForForeground(config.photoFilter, config.backgroundDim)
             }
             canvas.drawBitmap(foregroundBitmap, null, dstRect, fgPaint)
         }
@@ -138,6 +140,20 @@ object LyricFrameRenderer {
                 accentColor = config.accentColor,
                 font = resolveTypeface(context, config.font)
             )
+        }
+
+        // Vista previa en rosa translúcido de la máscara al editar el contorno
+        if (showMaskOverlay && maskOverlayBitmap != null && !maskOverlayBitmap.isRecycled) {
+            val dstRect = computeCenterCropRect(
+                maskOverlayBitmap.width.toFloat(),
+                maskOverlayBitmap.height.toFloat(),
+                width,
+                height
+            )
+            val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                colorFilter = PorterDuffColorFilter(Color.argb(125, 255, 92, 138), PorterDuff.Mode.SRC_IN)
+            }
+            canvas.drawBitmap(maskOverlayBitmap, null, dstRect, overlayPaint)
         }
     }
 
@@ -408,7 +424,7 @@ object LyricFrameRenderer {
         }
     }
 
-    private fun computeCenterCropRect(srcW: Float, srcH: Float, dstW: Int, dstH: Int): RectF {
+    internal fun computeCenterCropRect(srcW: Float, srcH: Float, dstW: Int, dstH: Int): RectF {
         val scale = max(dstW / srcW, dstH / srcH)
         val scaledW = srcW * scale
         val scaledH = srcH * scale
@@ -464,44 +480,57 @@ object LyricFrameRenderer {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), vignettePaint)
     }
 
-    private fun colorFilterFor(filter: PhotoFilter): ColorMatrixColorFilter? {
-        val cm = when (filter) {
-            PhotoFilter.NONE -> return null
-            PhotoFilter.WARM -> ColorMatrix(
-                floatArrayOf(
-                    1.12f, 0f, 0f, 0f, 10f,
-                    0f, 1.02f, 0f, 0f, 2f,
-                    0f, 0f, 0.86f, 0f, -6f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            PhotoFilter.COOL -> ColorMatrix(
-                floatArrayOf(
-                    0.88f, 0f, 0f, 0f, -4f,
-                    0f, 1.02f, 0f, 0f, 4f,
-                    0f, 0f, 1.16f, 0f, 12f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            PhotoFilter.BW -> ColorMatrix().apply { setSaturation(0f) }
-            PhotoFilter.VINTAGE -> ColorMatrix(
-                floatArrayOf(
-                    0.96f, 0.16f, 0.06f, 0f, 12f,
-                    0.06f, 0.92f, 0.08f, 0f, 8f,
-                    0.02f, 0.08f, 0.74f, 0f, 14f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            PhotoFilter.MOODY -> ColorMatrix(
-                floatArrayOf(
-                    0.82f, 0f, 0f, 0f, -12f,
-                    0f, 0.84f, 0f, 0f, -10f,
-                    0f, 0f, 0.96f, 0f, 4f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
+    private fun colorFilterFor(filter: PhotoFilter): ColorMatrixColorFilter? =
+        colorMatrixFor(filter)?.let { ColorMatrixColorFilter(it) }
+
+    private fun colorFilterForForeground(filter: PhotoFilter, dim: Float): ColorMatrixColorFilter? {
+        val clampedDim = dim.coerceIn(0f, 0.85f)
+        val base = colorMatrixFor(filter)
+        if (base == null && clampedDim <= 0.001f) return null
+        val result = base ?: ColorMatrix()
+        if (clampedDim > 0.001f) {
+            val scale = 1f - clampedDim
+            val dimMatrix = ColorMatrix().apply { setScale(scale, scale, scale, 1f) }
+            result.postConcat(dimMatrix)
         }
-        return ColorMatrixColorFilter(cm)
+        return ColorMatrixColorFilter(result)
+    }
+
+    private fun colorMatrixFor(filter: PhotoFilter): ColorMatrix? = when (filter) {
+        PhotoFilter.NONE -> null
+        PhotoFilter.WARM -> ColorMatrix(
+            floatArrayOf(
+                1.12f, 0f, 0f, 0f, 10f,
+                0f, 1.02f, 0f, 0f, 2f,
+                0f, 0f, 0.86f, 0f, -6f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+        PhotoFilter.COOL -> ColorMatrix(
+            floatArrayOf(
+                0.88f, 0f, 0f, 0f, -4f,
+                0f, 1.02f, 0f, 0f, 4f,
+                0f, 0f, 1.16f, 0f, 12f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+        PhotoFilter.BW -> ColorMatrix().apply { setSaturation(0f) }
+        PhotoFilter.VINTAGE -> ColorMatrix(
+            floatArrayOf(
+                0.96f, 0.16f, 0.06f, 0f, 12f,
+                0.06f, 0.92f, 0.08f, 0f, 8f,
+                0.02f, 0.08f, 0.74f, 0f, 14f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+        PhotoFilter.MOODY -> ColorMatrix(
+            floatArrayOf(
+                0.82f, 0f, 0f, 0f, -12f,
+                0f, 0.84f, 0f, 0f, -10f,
+                0f, 0f, 0.96f, 0f, 4f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
     }
 
     private fun drawSongBadge(
